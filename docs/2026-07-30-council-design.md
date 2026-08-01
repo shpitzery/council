@@ -345,6 +345,12 @@ Evaluated inside `council_submit` and reported by `council_status`. Server-autho
 | 5 | `status != "active"` | stop immediately |
 | 6 | Cumulative await exceeds 5 minutes | `error` |
 
+**Evaluation order matters.** Rules 2, 3 and 4 are checked *before* rule 1. The cap's job
+is to guarantee the council stops, not to explain why it stopped. The first real council
+converged on its final round and was reported as `capped — reached max_rounds`, because
+the cap was checked first and always wins that race. Stopping was correct; the reason
+understated the result in the one direction a reader cares about.
+
 **Known limit, stated deliberately:** rules 2, 3 and 4 read what the models report about
 themselves, and self-reported agreement is exactly the judgment this system exists to
 distrust. Rule 1 is the only rule that does not depend on model honesty. `max_rounds` is

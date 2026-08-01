@@ -70,13 +70,26 @@ export function summaryBlock(council, entries, verdict) {
   const agents = [...new Set(entries.map((e) => e.agent))];
   const rounds = entries.length ? Math.max(...entries.map((e) => e.round)) : 0;
 
-  const unresolved = entries
-    .filter((e) => e.verdict_on_peer === "UNRESOLVED" && e.settling_test)
-    .map((e) => `${e.agent} (round ${e.round}): ${e.settling_test}`);
+  // Only the final round is reported as open. A disagreement raised in round 2 and
+  // dropped in round 3 is settled, and listing it as open forces the reader to work out
+  // for themselves which objections still stand.
+  const final = entries.filter((e) => e.round === rounds);
+  const resolvedEarlier = entries.filter(
+    (e) => e.round < rounds && e.verdict_on_peer === "DISAGREE",
+  ).length;
 
-  const disagreements = entries
+  const unresolved = final
+    .filter((e) => e.verdict_on_peer === "UNRESOLVED" && e.settling_test)
+    .map((e) => `${e.agent} — would be settled by: ${e.settling_test}`);
+
+  // `disagreement` holds the peer's quoted line, so the label names who is objecting and
+  // to whom. Attributing the quote to its submitter reads exactly backwards.
+  const disagreements = final
     .filter((e) => e.verdict_on_peer === "DISAGREE" && e.disagreement)
-    .map((e) => `${e.agent} (round ${e.round}): ${e.disagreement}`);
+    .map((e) => {
+      const target = agents.find((a) => a !== e.agent) ?? "peer";
+      return `${e.agent} contests ${target}'s: ${e.disagreement}`;
+    });
 
   const lines = [
     `COUNCIL ${council.goal_id} — ${council.status} after ${rounds} round${rounds === 1 ? "" : "s"}`,
@@ -92,9 +105,18 @@ export function summaryBlock(council, entries, verdict) {
 
   lines.push("");
   lines.push(
-    disagreements.length ? "Open disagreements:" : "Open disagreements:  none recorded",
+    disagreements.length
+      ? `Still disagreed at the end (round ${rounds}):`
+      : "Still disagreed at the end:  nothing",
   );
   for (const d of disagreements) lines.push(`  - ${d}`);
+
+  if (resolvedEarlier > 0) {
+    lines.push(
+      `  (${resolvedEarlier} earlier disagreement${resolvedEarlier === 1 ? "" : "s"} ` +
+        "dropped before the end — see the record)",
+    );
+  }
 
   lines.push("");
   lines.push(unresolved.length ? "Unresolved, and what would settle it:" : "Unresolved:  none");

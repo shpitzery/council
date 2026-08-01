@@ -113,6 +113,23 @@ describe("evaluateStopRules", () => {
     assert.match(r.reason, /max_rounds/);
   });
 
+  // Regression: the first real council converged on its final round and was reported as
+  // `capped — reached max_rounds`, because the cap was checked before the agreement rules.
+  // Stopping was correct; the reason understated the result.
+  test("agreement on the final round reports converged, not capped", () => {
+    const all = [...pair(1), ...pair(2), ...pair(3, { verdict_on_peer: "AGREE" })];
+    const r = evaluateStopRules(council({ round: 3 }), [], all);
+    assert.equal(r.stop, true);
+    assert.equal(r.status, "converged");
+    assert.match(r.reason, /AGREE/);
+  });
+
+  test("running out of new arguments on the final round also reports converged", () => {
+    const all = [...pair(1), ...pair(2), ...pair(3, { new_arguments: false })];
+    const r = evaluateStopRules(council({ round: 3 }), [], all);
+    assert.equal(r.status, "converged");
+  });
+
   test("rule 2: both reporting AGREE converges", () => {
     const all = [...pair(1), ...pair(2, { verdict_on_peer: "AGREE" })];
     const r = evaluateStopRules(council(), [], all);

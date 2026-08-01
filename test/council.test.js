@@ -171,7 +171,9 @@ describe("a council, end to end, with no models", () => {
     const { payload } = await call(claude, "council_close", { goal_id: goalId, agent: "claude" });
     assert.match(payload.summary, /capped after 3 rounds/);
     assert.match(payload.summary, /max_rounds/);
-    assert.match(payload.summary, /Open disagreements:/);
+    // The label names who objects and to whom — the quoted text is the peer's line.
+    assert.match(payload.summary, /claude contests codex's:/);
+    assert.match(payload.summary, /codex contests claude's:/);
     assert.ok(filesIn(join(root, goalId)).includes("verdict.md"));
   });
 

@@ -126,14 +126,12 @@ export function evaluateStopRules(council, latest, all) {
     return { stop: false };
   }
 
-  // Rule 1 — the round cap. The only rule that does not trust the models.
-  if (completedRound >= council.max_rounds) {
-    return {
-      stop: true,
-      status: "capped",
-      reason: `reached max_rounds (${council.max_rounds})`,
-    };
-  }
+  // Rules 2, 3 and 4 are checked before the cap deliberately.
+  //
+  // The cap's job is to guarantee the council *stops*, not to explain why. A final round
+  // that genuinely converges should be reported as converged. Checking the cap first made
+  // every such council report "ran out of rounds", which understates the result in the one
+  // direction that matters to someone reading the verdict.
 
   // Rule 2 — both sides say they agree.
   if (thisRound.length > 0 && thisRound.every((e) => e.verdict_on_peer === "AGREE")) {
@@ -161,6 +159,17 @@ export function evaluateStopRules(council, latest, all) {
         reason: `${agent} reported UNRESOLVED in two consecutive rounds`,
       };
     }
+  }
+
+  // Rule 1 — the round cap. Last, so it is the reason only when nothing better applies.
+  // It remains the only rule that does not depend on a model being sincere, and so it
+  // remains the real guarantee that a council terminates.
+  if (completedRound >= council.max_rounds) {
+    return {
+      stop: true,
+      status: "capped",
+      reason: `reached max_rounds (${council.max_rounds}) with the disagreement still open`,
+    };
   }
 
   return { stop: false };
