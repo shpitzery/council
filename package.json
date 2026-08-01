@@ -11,7 +11,8 @@
     "council-server": "src/server.js"
   },
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test 'test/*.test.js'",
+    "smoke": "node test/smoke.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"
