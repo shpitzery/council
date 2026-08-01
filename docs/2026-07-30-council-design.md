@@ -146,17 +146,33 @@ Two consequences that change the design:
    be inferred from `cwd`. Under Codex, `cwd` identifies a conversation; it says nothing
    about which project is under discussion.
 
+### Second measurement — the server process is reused
+
+A later call reported `server_pid: 88074` and the same `server_cwd`, both identical to the
+earlier run. The process was not respawned.
+
+So `cwd` is **not** a reliable conversation key under the Codex app: it is fixed at
+whatever the server was first spawned with, and the server cannot tell which conversation
+is calling it.
+
+**Design response — one active council per agent at a time.** The stop hook finds its
+council by looking up the single `active` council for its agent, and needs no conversation
+identifier at all. `council_open` rejects a second council for an agent that already has
+one active. This is less machinery than `cwd` matching and does not depend on how the app
+manages server processes.
+
+The cost is a real restriction: two councils cannot run at once from the same side. That
+does not arise in normal use, and the restriction is enforced rather than assumed.
+
+**A 90-second tool call also returned normally** (`elapsed_seconds: 90.01`). The 50-second
+poll budget for `council_await_peer` has comfortable margin on the Codex side.
+
 ### Unverified — must be tested during the build
 
-1. Whether the Codex app spawns **one server process per conversation** or shares one
-   across conversations. Binding by `cwd` requires the former. Test: open a second
-   conversation, call `council_ping`, and compare `server_pid` and `server_cwd` against the
-   first. If they match, `cwd` is not a conversation key and binding must use something
-   else.
-2. The **ceiling** on tool-call duration. 30s is proven in the Codex app; 60s and 90s are
-   untested, and the Claude side is untested entirely. Drives the `council_await_peer` poll
-   budget, currently a guess of 50s.
-3. Whether `codex exec resume` can attach to a desktop-app session. Not needed for v1;
+1. The tool-call ceiling **on the Claude side**. 90s is proven in the Codex app; Claude is
+   untested, and MCP servers are only picked up at session start, so this needs a fresh
+   Claude session.
+2. Whether `codex exec resume` can attach to a desktop-app session. Not needed for v1;
    relevant only to Deferred Work.
 
 ## Transport decision
