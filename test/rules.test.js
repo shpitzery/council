@@ -51,10 +51,16 @@ describe("validateSubmission", () => {
     );
   });
 
-  test("requires a verdict after round 1", () => {
+  test("requires a verdict after round 1, and explains why", () => {
     assert.throws(
       () => validateSubmission(entry({ verdict_on_peer: null }), council(), true),
-      (e) => e.field === "verdict_on_peer",
+      (e) =>
+        e.field === "verdict_on_peer" &&
+        // The bare enum list read as "round 1 demands a verdict" to a session that had
+        // lost track of its own progress, which is how a sound council got reported as
+        // compromised. The message must name the actual situation.
+        /council is on round 2, not round 1/.test(e.message) &&
+        /council_await_peer/.test(e.message),
     );
   });
 

@@ -22,6 +22,7 @@ import {
   insertEntry,
   getEntry,
   getEntriesForRound,
+  getEntriesForAgent,
   getAllEntries,
   setStatus,
   advanceRound,
@@ -153,7 +154,19 @@ server.registerTool(
 
       writeBrief(result);
       const participants = getParticipants(db(), result.goal_id).map((p) => p.agent);
-      log(`open: ${result.goal_id} agent=${agent} round=${result.round}`);
+
+      // What this agent has already said. A session that lost its context, or a second
+      // session joining the same council, otherwise has no way to know it already
+      // answered — it re-submits, and the failure surfaces as a confusing complaint about
+      // a different field entirely.
+      const mine = getEntriesForAgent(db(), result.goal_id, agent);
+      const myLastRound = mine.length ? Math.max(...mine.map((e) => e.round)) : 0;
+      const owesThisRound = myLastRound < result.round;
+
+      log(
+        `open: ${result.goal_id} agent=${agent} round=${result.round} ` +
+          `already_submitted=${myLastRound}`,
+      );
 
       return ok({
         ok: true,
@@ -162,7 +175,16 @@ server.registerTool(
         project_path: result.project_path,
         participants,
         waiting_for_peer: !participants.includes(peerOf(agent)),
-        instruction: roundInstruction(result, result.round),
+        your_submitted_rounds: mine.map((e) => e.round),
+        your_last_position: mine.length ? mine[mine.length - 1].position : null,
+        next_step: owesThisRound
+          ? `Submit your answer for round ${result.round}.`
+          : `You have already submitted round ${myLastRound}. Do not submit it again — ` +
+            "call council_await_peer to read the peer's answer for that round.",
+        instruction: owesThisRound
+          ? roundInstruction(result, result.round)
+          : "Read your own last position above before continuing, so you do not contradict " +
+            "or disown what you already argued.",
       });
     } catch (error) {
       return fail(error.message);
@@ -399,6 +421,9 @@ server.registerTool(
           round: e.round,
           verdict_on_peer: e.verdict_on_peer,
         })),
+        // Full text of your own entries, so a session that lost context can recover what it
+        // argued rather than disown it.
+        your_entries: getEntriesForAgent(db(), council.goal_id, agent),
       });
     } catch (error) {
       return fail(error.message);

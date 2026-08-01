@@ -186,6 +186,20 @@ export function getEntry(db, goalId, agent, round) {
   );
 }
 
+/**
+ * Everything this agent has already submitted.
+ *
+ * A session that lost its context — or a second session joining the same council — has no
+ * other way to learn it has already answered. Without this it re-submits, gets stamped
+ * with the current round, and fails validation with a message about the wrong thing.
+ */
+export function getEntriesForAgent(db, goalId, agent) {
+  return db
+    .prepare("SELECT * FROM entries WHERE goal_id = ? AND agent = ? ORDER BY round")
+    .all(goalId, agent)
+    .map(inflate);
+}
+
 export function getEntriesForRound(db, goalId, round) {
   return db
     .prepare("SELECT * FROM entries WHERE goal_id = ? AND round = ? ORDER BY agent")

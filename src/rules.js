@@ -90,7 +90,17 @@ export function validateSubmission(entry, council, isParticipant) {
     }
   } else {
     if (!VERDICTS.includes(clean.verdict_on_peer)) {
-      throw new ValidationError("verdict_on_peer", `must be one of ${VERDICTS.join(", ")}`);
+      // Say why, not just what. A session that has lost track of its own progress lands
+      // here believing it is answering round 1, and a bare "must be one of ..." reads as
+      // though round 1 itself demands a verdict. That misreading has already caused one
+      // council to be reported as compromised when it was sound.
+      throw new ValidationError(
+        "verdict_on_peer",
+        `must be one of ${VERDICTS.join(", ")}. This council is on round ${clean.round}, ` +
+          "not round 1 — you have already submitted an earlier round. If you have not read " +
+          "the peer's latest answer yet, call council_await_peer first, then submit a " +
+          "verdict on what they actually wrote.",
+      );
     }
   }
 

@@ -62,6 +62,25 @@ describe("a council, end to end, with no models", () => {
     assert.deepEqual(filesIn(join(root, goalId)), ["brief.md"]);
   });
 
+  // Regression: a second Claude session rejoined a council whose round 1 it had already
+  // answered 82 minutes earlier, could not tell, re-submitted, and read the resulting
+  // error as proof its round 1 had been lost. It then told the user to distrust a sound
+  // council and disowned an argument it had genuinely made.
+  test("rejoining reports what you already submitted", async () => {
+    const { payload } = await call(claude, "council_open", { agent: "claude" });
+    assert.deepEqual(payload.your_submitted_rounds, [1]);
+    assert.match(payload.your_last_position, /Fix the cache key/);
+    assert.match(payload.next_step, /already submitted round 1/);
+    assert.match(payload.next_step, /Do not submit it again/);
+  });
+
+  test("council_status returns the full text of your own entries", async () => {
+    const { payload } = await call(claude, "council_status", { goal_id: goalId, agent: "claude" });
+    assert.equal(payload.your_entries.length, 1);
+    assert.equal(payload.your_entries[0].agent, "claude");
+    assert.ok(payload.your_entries[0].reasoning.length > 0);
+  });
+
   test("submitting twice for the same round is rejected", async () => {
     const { isError } = await call(claude, "council_submit", {
       goal_id: goalId,
