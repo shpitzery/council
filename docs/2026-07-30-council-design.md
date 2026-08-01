@@ -115,16 +115,48 @@ Hook trust is granted per hook definition, keyed in `[hooks.state]` as
 covers the hook definition in `config.toml` and not the script it points at, a hook should
 invoke a script file — the script can then change without re-trusting.
 
+### Phase 0/1 result — the Codex desktop app (2026-08-01)
+
+One turn in the app, calling `council_ping` with a 30-second delay, settled four questions
+at once.
+
+| Finding | Evidence |
+|---|---|
+| The app fires `Stop` hooks, exactly as the CLI does | Probe log written on turn end, `session_id` `019fbcab-…` |
+| The app surfaces servers registered via `codex mcp add` | `council_ping` was found and called; no app-specific registration needed |
+| A 30-second tool call survives in the app | `elapsed_seconds: 30.01`, returned normally |
+| The server can identify its caller | `{"name":"codex-mcp-client","title":"Codex","version":"0.146.0-alpha.9.2"}` from `getClientVersion()` |
+
+**Phase 4 is viable.** The stop-hook mechanism works in the app the user actually uses.
+
+Two consequences that change the design:
+
+1. **The server sees no session identifier in its environment** — `environment: {}`. The
+   model cannot pass a session id it does not have. This confirms the binding approach
+   below: the hook, which does receive `session_id`, must bind itself.
+
+2. **`cwd` is a per-conversation scratch directory, not the project.** The app spawned the
+   server with `cwd` = `~/Documents/Codex/2026-08-01/call-the-council-ping-tool-with`,
+   derived from the opening prompt. The `Stop` hook reported the **identical** path.
+
+   That the two match is what makes hook binding work: the server records its `cwd` at
+   `council_open`, and the hook finds its council by matching the same value.
+
+   It also means `project_path` **must be passed explicitly** by the model and must never
+   be inferred from `cwd`. Under Codex, `cwd` identifies a conversation; it says nothing
+   about which project is under discussion.
+
 ### Unverified — must be tested during the build
 
-1. Whether the Codex **desktop app** fires `Stop` hooks, as the CLI does. The engine is
-   proven; the app is the same binary family reading the same config, but it has not been
-   observed. Confirmed by one turn in the app with the probe installed.
-2. Whether the Codex desktop app surfaces MCP servers registered via `codex mcp add`, or
-   requires its own registration path. **Phase 1 verifies this before any protocol work.**
-3. Each client's maximum tool-call duration. Drives the `council_await_peer` design; see
-   Transport.
-4. Whether `codex exec resume` can attach to a desktop-app session. Not needed for v1;
+1. Whether the Codex app spawns **one server process per conversation** or shares one
+   across conversations. Binding by `cwd` requires the former. Test: open a second
+   conversation, call `council_ping`, and compare `server_pid` and `server_cwd` against the
+   first. If they match, `cwd` is not a conversation key and binding must use something
+   else.
+2. The **ceiling** on tool-call duration. 30s is proven in the Codex app; 60s and 90s are
+   untested, and the Claude side is untested entirely. Drives the `council_await_peer` poll
+   budget, currently a guess of 50s.
+3. Whether `codex exec resume` can attach to a desktop-app session. Not needed for v1;
    relevant only to Deferred Work.
 
 ## Transport decision
