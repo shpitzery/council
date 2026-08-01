@@ -72,11 +72,54 @@ Established by inspection on 2026-07-30. Recorded so they are not re-derived.
 | `codex exec resume <id\|thread_name> <prompt>` exists | `codex exec resume --help` |
 | `codex exec` supports `--output-schema`, `-o/--output-last-message`, `--json`, `-C/--cd` | `codex exec --help` |
 
+### Phase 0 result — Codex `Stop` hooks work (2026-08-01)
+
+Tested against the Codex CLI with a probe hook. All three findings confirmed by direct
+observation, not inference.
+
+| Finding | Evidence |
+|---|---|
+| The `Stop` hook fires | `hook: Stop` / `hook: Stop Completed` in run output; probe log written |
+| `{"decision":"block"}` continues the turn | `hook: Stop Blocked` twice, then a clean exit on the third |
+| The model obeys the hook's `reason` | Instructed to reply `PROBE-OK`; it did, on both blocked turns |
+| **Untrusted hooks are skipped silently** | First run produced no log, no warning, no error — indistinguishable from the event not existing. `--dangerously-bypass-hook-trust` made it fire immediately |
+
+The hook receives this payload on stdin:
+
+```json
+{
+  "session_id": "019fbca1-21bf-7e21-b10a-8a8f2b5967ec",
+  "turn_id": "019fbca1-2256-71a1-8191-55706e6aae60",
+  "transcript_path": "/Users/yuvalshpitzer/.codex/sessions/2026/08/01/rollout-....jsonl",
+  "cwd": "/Users/yuvalshpitzer/Desktop/code/personal/council",
+  "hook_event_name": "Stop",
+  "model": "codex-auto-review",
+  "permission_mode": "bypassPermissions",
+  "stop_hook_active": false,
+  "last_assistant_message": "ROUND1"
+}
+```
+
+Three consequences for the design:
+
+1. **`session_id` is provided.** This closes the open decision below on how the stop hook
+   binds to a council. The `project_path` + agent fallback is not needed.
+2. **`stop_hook_active` flips to `true` on a blocked continuation.** A recursion guard,
+   supplied by the host. The stop hook must read it rather than counting rounds itself for
+   loop safety — though the `max_rounds` cap stays, for a different purpose.
+3. **`last_assistant_message` is included.** No transcript parsing. This removes the most
+   fragile part of `ralph-loop`'s implementation.
+
+Hook trust is granted per hook definition, keyed in `[hooks.state]` as
+`<config path>:<event_snake>:<index>:<index>` with a `trusted_hash`. Because the hash
+covers the hook definition in `config.toml` and not the script it points at, a hook should
+invoke a script file — the script can then change without re-trusting.
+
 ### Unverified — must be tested during the build
 
-1. Whether the Codex **desktop app** executes `stop` hooks. The feature flag is on and the
-   CLI binary carries the contract, but app behaviour is not proven. **Phase 0 gates
-   Phase 3 on this.**
+1. Whether the Codex **desktop app** fires `Stop` hooks, as the CLI does. The engine is
+   proven; the app is the same binary family reading the same config, but it has not been
+   observed. Confirmed by one turn in the app with the probe installed.
 2. Whether the Codex desktop app surfaces MCP servers registered via `codex mcp add`, or
    requires its own registration path. **Phase 1 verifies this before any protocol work.**
 3. Each client's maximum tool-call duration. Drives the `council_await_peer` design; see
@@ -382,27 +425,27 @@ and that is cheap to find out. Phase 3 is a usable product on its own.
 
 ## Open decisions
 
-### How the stop hook identifies its own council — unresolved
+### How the stop hook identifies its own council — settled
 
-The hook receives a session id from its host. `participants.session_id` is meant to match
-it, so the hook knows whether this session owns the active council. But it is not
-established that a model can obtain its own session id in order to pass it to
-`council_open`.
+Phase 0 showed the hook receives both `session_id` and `cwd` on stdin. That is enough.
 
-Candidate approaches, to be settled in Phase 1 once the clients' server environment is
-observable:
+**The hook binds itself on first fire.** It looks up the active council for its `cwd` and
+agent, and writes its own `session_id` into `participants`. Every later fire matches on
+`session_id` and does not block when it differs.
 
-1. The client passes a session identifier to the MCP server as an environment variable.
-   Cleanest if it exists; unverified for both clients.
-2. Scope by `project_path` plus the participant's agent name, accepting that two
-   simultaneous councils in one project on one side are unsupported. Adequate for v1.
-3. The hook writes its own session id on first fire, and the server binds it then. Late,
-   but self-correcting.
+This works without the model ever knowing its own session id, which was the gap that made
+this an open question. `session_id` on `council_open` therefore stays optional — the hook
+fills it in.
 
-Approach 2 is the fallback and is sufficient to ship Phase 4; it only forbids a case that
-does not arise in normal use. This is a Phase 1 finding, not a blocker.
+The `project_path` + agent fallback is no longer needed and should not be built.
 
 ### Settled defaults
 
 Root `~/.council/`, `max_rounds` 3, await poll 50s per call, 5-minute total cap,
-Python + stdio + SQLite.
+**Node** + stdio + SQLite.
+
+Node was chosen over the Python of revision 2: Node v25.6.1 ships SQLite built in
+(`node:sqlite`, no flag required), leaving `@modelcontextprotocol/sdk` as the only
+dependency, and it matches the four `npx`-based servers already registered in
+`~/.codex/config.toml`. `node:sqlite` emits an `ExperimentalWarning` on stderr, which is
+harmless — but stdout carries the MCP protocol and must stay clean.

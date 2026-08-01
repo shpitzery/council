@@ -1,0 +1,19 @@
+{
+  "name": "council",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server running structured, bounded critique rounds between Claude Code and Codex",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "council-server": "src/server.js"
+  },
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}
