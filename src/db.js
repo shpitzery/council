@@ -60,6 +60,21 @@ const SCHEMA = [
      PRIMARY KEY (goal_id, agent, round)
    )`,
 
+  // The drafting phase. The round record shows what each side argued; it does not answer
+  // the question. One agent drafts the answer, the peer reviews it, bounded by MAX_REVIEWS.
+  `CREATE TABLE IF NOT EXISTS drafts (
+     goal_id     TEXT NOT NULL REFERENCES councils(goal_id) ON DELETE CASCADE,
+     revision    INTEGER NOT NULL,
+     author      TEXT NOT NULL,
+     answer      TEXT NOT NULL,
+     drafted_at  TEXT NOT NULL,
+     verdict     TEXT,
+     revisions   TEXT,
+     reviewer    TEXT,
+     reviewed_at TEXT,
+     PRIMARY KEY (goal_id, revision)
+   )`,
+
   "CREATE INDEX IF NOT EXISTS entries_by_round ON entries (goal_id, round)",
   "CREATE INDEX IF NOT EXISTS councils_by_status ON councils (status)",
 ];
@@ -235,6 +250,39 @@ export function setStatus(db, goalId, status, stopReason = null) {
     now(),
     goalId,
   );
+}
+
+/** The agent who drafts the answer: whoever joined first. Deterministic, so two idle
+ *  models cannot race for the role. */
+export function getDrafter(db, goalId) {
+  const row = db
+    .prepare("SELECT agent FROM participants WHERE goal_id = ? ORDER BY joined_at, agent LIMIT 1")
+    .get(goalId);
+  return row?.agent ?? null;
+}
+
+export function getDrafts(db, goalId) {
+  return db.prepare("SELECT * FROM drafts WHERE goal_id = ? ORDER BY revision").all(goalId);
+}
+
+export function getLatestDraft(db, goalId) {
+  return (
+    db.prepare("SELECT * FROM drafts WHERE goal_id = ? ORDER BY revision DESC LIMIT 1").get(goalId) ??
+    null
+  );
+}
+
+export function insertDraft(db, goalId, revision, author, answer) {
+  db.prepare(
+    "INSERT INTO drafts (goal_id, revision, author, answer, drafted_at) VALUES (?, ?, ?, ?, ?)",
+  ).run(goalId, revision, author, answer, now());
+}
+
+export function reviewDraft(db, goalId, revision, reviewer, verdict, revisions) {
+  db.prepare(
+    `UPDATE drafts SET verdict = ?, revisions = ?, reviewer = ?, reviewed_at = ?
+     WHERE goal_id = ? AND revision = ? AND verdict IS NULL`,
+  ).run(verdict, revisions ?? null, reviewer, now(), goalId, revision);
 }
 
 export function advanceRound(db, goalId, round) {

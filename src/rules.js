@@ -185,6 +185,99 @@ export function evaluateStopRules(council, latest, all) {
   return { stop: false };
 }
 
+// ---------------------------------------------------------------------------
+// The drafting phase
+//
+// The round record shows what each side argued. It does not answer the question. One
+// agent drafts the answer the user actually wanted; the peer reviews it. Bounded, because
+// two models polishing prose at each other has no natural stopping point.
+// ---------------------------------------------------------------------------
+
+export const MAX_REVIEWS = 2;
+export const MAX_DRAFTS = MAX_REVIEWS + 1;
+export const DRAFT_VERDICTS = ["APPROVE", "REVISE"];
+export const LIMITS_DRAFT = { answer: 8000, revisions: 3000 };
+
+/**
+ * Whose move it is in the drafting phase, given the drafts so far.
+ * Returns { phase, actor, revision, reason } — phase is one of
+ * "draft" | "review" | "final".
+ */
+export function draftState(drafts, drafter, reviewer) {
+  const latest = drafts.length ? drafts[drafts.length - 1] : null;
+
+  if (!latest) {
+    return { phase: "draft", actor: drafter, revision: 1 };
+  }
+
+  if (latest.verdict === null || latest.verdict === undefined) {
+    // Drafted but not yet reviewed. The last draft is final if no reviews remain.
+    if (latest.revision > MAX_REVIEWS) {
+      return {
+        phase: "final",
+        revision: latest.revision,
+        reason: `revision ${latest.revision} is final; the review budget of ${MAX_REVIEWS} is spent`,
+      };
+    }
+    return { phase: "review", actor: reviewer, revision: latest.revision };
+  }
+
+  if (latest.verdict === "APPROVE") {
+    return {
+      phase: "final",
+      revision: latest.revision,
+      reason: `${latest.reviewer} approved revision ${latest.revision}`,
+    };
+  }
+
+  // REVISE. Another draft is owed unless the budget is spent.
+  if (latest.revision >= MAX_DRAFTS) {
+    return {
+      phase: "final",
+      revision: latest.revision,
+      reason: `revision ${latest.revision} shipped with unaddressed review objections`,
+    };
+  }
+  return { phase: "draft", actor: drafter, revision: latest.revision + 1 };
+}
+
+export function validateDraft(answer) {
+  return requireText(answer, "answer", LIMITS_DRAFT.answer);
+}
+
+export function validateReview(verdict, revisions) {
+  if (!DRAFT_VERDICTS.includes(verdict)) {
+    throw new ValidationError("verdict", `must be one of ${DRAFT_VERDICTS.join(", ")}`);
+  }
+  // An approval closes the answer, so a rejection has to say what to change. "Needs work"
+  // is not a review.
+  if (verdict === "REVISE") {
+    return requireText(revisions, "revisions", LIMITS_DRAFT.revisions);
+  }
+  return null;
+}
+
+export const DRAFT_INSTRUCTION = [
+  "Write the answer the user actually asked for — what you would tell them if they had",
+  "asked you privately, not a summary of the debate. Prose, not fields.",
+  "",
+  "It must: answer the question directly and say what to do first; carry anything that",
+  "stayed unresolved, and name what would settle it; and name any decision that is the",
+  "user's to make rather than yours.",
+  "",
+  "Do not claim more agreement than the record shows. If the council converged because",
+  "both of you ran out of arguments rather than because anything was proven, say so.",
+].join(" ");
+
+export const REVIEW_INSTRUCTION = [
+  "Review the draft as the answer the user will act on. APPROVE only if you would be",
+  "content to have written it yourself.",
+  "",
+  "REVISE if it overstates agreement, drops something unresolved, buries the first action,",
+  "or states as settled anything the record leaves open. Quote the part you want changed",
+  "and say what it should say instead. A revision request without specifics is not a review.",
+].join(" ");
+
 /** The instruction handed to a model for the round it is about to answer. */
 export function roundInstruction(council, round) {
   const isFinal = round >= council.max_rounds;

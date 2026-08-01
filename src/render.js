@@ -135,6 +135,45 @@ export function summaryBlock(council, entries, verdict) {
   return lines.join("\n");
 }
 
+/**
+ * The answer itself, as agreed. Separate from verdict.md on purpose: this is the file the
+ * user reads, and the round record is the evidence behind it.
+ */
+export function writeAnswer(council, drafts) {
+  const dir = ensureCouncilDir(council.goal_id);
+  const final = drafts.length ? drafts[drafts.length - 1] : null;
+  if (!final) return null;
+
+  const unaddressed =
+    final.verdict === "REVISE"
+      ? final.revisions
+      : drafts.find((d) => d.verdict === "REVISE" && d.revision === drafts.length)?.revisions;
+
+  const lines = [
+    `# ${council.question}`,
+    "",
+    final.answer,
+    "",
+    "---",
+    "",
+    `Drafted by ${final.author}, revision ${final.revision} of ${drafts.length}.`,
+    final.verdict === "APPROVE"
+      ? `Approved by ${final.reviewer}.`
+      : final.verdict === "REVISE"
+        ? `**Shipped without approval** — ${final.reviewer} still wanted changes:\n\n> ${unaddressed}`
+        : "Not reviewed — the review budget was spent.",
+    "",
+    `Reached after ${council.round} round${council.round === 1 ? "" : "s"} of debate ` +
+      `(${council.status}: ${council.stop_reason ?? "no reason recorded"}).`,
+    "",
+    `Working: [verdict.md](./verdict.md)`,
+  ];
+
+  const path = join(dir, "answer.md");
+  writeFileSync(path, lines.join("\n") + "\n");
+  return path;
+}
+
 export function writeVerdict(council, entries, verdict) {
   const dir = ensureCouncilDir(council.goal_id);
   const lines = [

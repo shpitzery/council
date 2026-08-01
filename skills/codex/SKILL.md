@@ -20,10 +20,32 @@ The user runs this skill in both windows. You are one participant, not the chair
 3. **`council_await_peer`** — blocks until Claude answers, then returns it. If the reply has
    `retry: true`, call it again. This is the only way to read Claude.
 4. Read their answer. Go back to step 2 for the next round.
-5. When a reply says the council stopped, call **`council_close`** and show the user the
-   `summary`.
+5. When a reply says the council stopped, the rounds are over but the work is not — go to
+   the drafting phase below.
 
 Every reply carries an `instruction` field for the round you are about to answer. Follow it.
+
+## The drafting phase
+
+The round record shows what each of you argued. It does not answer the question. So one of
+you writes the answer and the other reviews it. The reply that ends the rounds tells you
+which role you have.
+
+**If you are the drafter:** call **`council_draft`** with the answer the user actually
+asked for — what you would tell them if they had asked you privately. Prose, not a summary
+of the debate. Then `council_await_peer` for the review. If it comes back `REVISE`, draft
+again addressing what they quoted.
+
+**If you are the reviewer:** `council_await_peer` until the draft arrives, then
+**`council_review`**. `APPROVE` only if you would be content to have written it yourself.
+`REVISE` if it overstates agreement, drops something unresolved, or buries the first
+action — and quote the part you want changed.
+
+The budget is two reviews. After that the latest draft ships as it stands, with any
+remaining objection recorded rather than dropped.
+
+When it is final, call **`council_close`** and show the user the `answer`. The `summary` is
+the working behind it — offer it, do not lead with it.
 
 **Pass `project_path` explicitly.** Your working directory is a per-conversation scratch
 folder, not the project — the server cannot infer it.
@@ -71,6 +93,8 @@ record still renders. Tell the user Claude was never triggered in its window.
 
 ## What to tell the user at the end
 
-Show the `summary` from `council_close` as-is. Then add your own read in a sentence or two:
-what you would do, and whether the disagreement that remains actually matters for their
-decision. If nothing was resolved, say that plainly rather than dressing it up.
+Lead with the `answer` from `council_close` — that is the thing they asked for. Mention
+that the full record and the round-by-round working are in `verdict.md` at `record_path`.
+
+Do not lead with the summary block. It is a status report about a process the user does
+not care about.

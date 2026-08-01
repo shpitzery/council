@@ -243,6 +243,18 @@ describe("the kill switch", () => {
     assert.equal(payload.retry, false);
     assert.match(payload.note, /aborted/);
   });
+
+  // The drafting phase must not swallow the kill switch: an aborted council has no
+  // conclusion to write up, and drafting one would trap the agent abort is meant to free.
+  test("an aborted council cannot be drafted", async () => {
+    const { payload, isError } = await call(claude, "council_draft", {
+      goal_id: goalId,
+      agent: "claude",
+      answer: "There is nothing to write up.",
+    });
+    assert.equal(isError, true);
+    assert.match(payload.error, /aborted, so there is no conclusion/);
+  });
 });
 
 describe("a peer that never answers", () => {

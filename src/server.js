@@ -26,15 +26,34 @@ import {
   getAllEntries,
   setStatus,
   advanceRound,
+  getDrafter,
+  getDrafts,
+  getLatestDraft,
+  insertDraft,
+  reviewDraft,
   VERDICTS,
   CONFIDENCES,
 } from "./db.js";
-import { validateSubmission, evaluateStopRules, roundInstruction, LIMITS } from "./rules.js";
+import {
+  validateSubmission,
+  evaluateStopRules,
+  roundInstruction,
+  draftState,
+  validateDraft,
+  validateReview,
+  DRAFT_INSTRUCTION,
+  REVIEW_INSTRUCTION,
+  DRAFT_VERDICTS,
+  MAX_REVIEWS,
+  LIMITS,
+  LIMITS_DRAFT,
+} from "./rules.js";
 import {
   databasePath,
   writeBrief,
   writeEntry,
   revealRound1,
+  writeAnswer,
   writeVerdict,
   summaryBlock,
   makeGoalId,
@@ -42,6 +61,11 @@ import {
 } from "./render.js";
 
 const AGENTS = ["claude", "codex"];
+
+// Only a council that reached a conclusion gets an answer drafted. An aborted council was
+// killed on purpose, and an errored one lost a participant — neither has a result worth
+// writing up, and drafting either would trap an agent the kill switch is meant to release.
+const DRAFTABLE = ["converged", "capped"];
 
 // One await call returns within this budget even if the peer has not arrived, so it stays
 // well inside any client's tool-call limit. 90s is proven to work in the Codex app.
@@ -80,8 +104,36 @@ function councilView(council) {
   };
 }
 
+/** Whose move it is in the drafting phase, plus the instruction for that move. */
+function draftView(goalId) {
+  const drafter = getDrafter(db(), goalId);
+  const reviewer = peerOf(drafter);
+  const drafts = getDrafts(db(), goalId);
+  const state = draftState(drafts, drafter, reviewer);
+  const latest = drafts.length ? drafts[drafts.length - 1] : null;
+
+  return {
+    drafter,
+    reviewer,
+    phase: state.phase,
+    next_actor: state.actor ?? null,
+    revision: state.revision,
+    reviews_remaining: Math.max(0, MAX_REVIEWS - drafts.filter((d) => d.verdict).length),
+    final_reason: state.reason ?? null,
+    latest_draft: latest
+      ? {
+          revision: latest.revision,
+          author: latest.author,
+          answer: latest.answer,
+          verdict: latest.verdict ?? null,
+          revisions: latest.revisions ?? null,
+        }
+      : null,
+  };
+}
+
 const server = new McpServer(
-  { name: "council", version: "0.2.0" },
+  { name: "council", version: "0.3.0" },
   { capabilities: { tools: {} } },
 );
 
@@ -295,7 +347,9 @@ server.registerTool(
         stopped: Boolean(outcome.verdict.stop),
         stop_reason: outcome.verdict.reason ?? null,
         next_step: outcome.verdict.stop
-          ? "The council has stopped. Call council_close for the verdict."
+          ? getDrafter(db(), goal_id) === agent
+            ? "The rounds are over. You are the drafter — write the answer with council_draft."
+            : "The rounds are over. Call council_await_peer to wait for the draft, then review it."
           : "Call council_await_peer to read the peer's answer for this round.",
       });
     } catch (error) {
@@ -325,6 +379,62 @@ server.registerTool(
     try {
       const council = getCouncil(db(), goal_id);
       if (!council) return fail(`no council with goal_id ${goal_id}`);
+
+      // Killed or broken: release immediately. This is what the kill switch depends on.
+      if (council.status !== "active" && !DRAFTABLE.includes(council.status)) {
+        return ok({
+          ok: true,
+          arrived: false,
+          retry: false,
+          ...councilView(council),
+          note: `council is ${council.status}; stop waiting`,
+        });
+      }
+
+      // The rounds are over; this is the drafting phase. Wait until the answer is final
+      // or it is this agent's move.
+      if (council.status !== "active") {
+        const deadline = Date.now() + POLL_BUDGET_MS;
+        while (Date.now() < deadline) {
+          const view = draftView(goal_id);
+
+          if (view.phase === "final") {
+            return ok({
+              ok: true,
+              arrived: true,
+              retry: false,
+              ...councilView(council),
+              ...view,
+              next_step: "The answer is final. Call council_close and show it to the user.",
+            });
+          }
+
+          if (view.next_actor === agent) {
+            return ok({
+              ok: true,
+              arrived: true,
+              retry: false,
+              ...councilView(council),
+              ...view,
+              instruction: view.phase === "draft" ? DRAFT_INSTRUCTION : REVIEW_INSTRUCTION,
+              next_step:
+                view.phase === "draft"
+                  ? `Write revision ${view.revision} with council_draft.`
+                  : `Review revision ${view.revision} with council_review.`,
+            });
+          }
+
+          await sleep(POLL_INTERVAL_MS);
+        }
+
+        return ok({
+          ok: true,
+          arrived: false,
+          retry: true,
+          ...draftView(goal_id),
+          note: `waiting on ${draftView(goal_id).next_actor}. Call council_await_peer again.`,
+        });
+      }
 
       const mine = getAllEntries(db(), goal_id).filter((e) => e.agent === agent);
       if (mine.length === 0) {
@@ -392,6 +502,135 @@ server.registerTool(
 );
 
 // ---------------------------------------------------------------------------
+// council_draft / council_review — the drafting phase
+// ---------------------------------------------------------------------------
+
+server.registerTool(
+  "council_draft",
+  {
+    title: "Draft the answer",
+    description:
+      "After the council stops, write the answer the user actually asked for — prose, not " +
+      "a summary of the debate. Only the drafter may call this. Call it again with a " +
+      "revised answer if the reviewer asks for changes.",
+    inputSchema: {
+      goal_id: z.string(),
+      agent: z.enum(AGENTS),
+      answer: z
+        .string()
+        .max(LIMITS_DRAFT.answer)
+        .describe("Markdown. The answer itself, what to do first, what is still open."),
+    },
+  },
+  async ({ goal_id, agent, answer }) => {
+    try {
+      const result = transact(db(), () => {
+        const council = getCouncil(db(), goal_id);
+        if (!council) throw new Error(`no council with goal_id ${goal_id}`);
+        if (council.status === "active") {
+          throw new Error("the council is still running; finish the rounds before drafting");
+        }
+        if (!DRAFTABLE.includes(council.status)) {
+          throw new Error(
+            `this council is ${council.status}, so there is no conclusion to write up`,
+          );
+        }
+
+        const view = draftView(goal_id);
+        if (agent !== view.drafter) {
+          throw new Error(
+            `${view.drafter} drafts this council; you are the reviewer. ` +
+              "Call council_await_peer to wait for the draft, then council_review.",
+          );
+        }
+        if (view.phase === "final") {
+          throw new Error(`the answer is already final — ${view.final_reason}`);
+        }
+        if (view.phase !== "draft") {
+          throw new Error(`nothing to draft: waiting on ${view.reviewer} to review`);
+        }
+
+        insertDraft(db(), goal_id, view.revision, agent, validateDraft(answer));
+        return { council, revision: view.revision };
+      });
+
+      const view = draftView(goal_id);
+      log(`draft: ${goal_id} rev=${result.revision} by=${agent}`);
+
+      return ok({
+        ok: true,
+        ...councilView(result.council),
+        ...view,
+        next_step: `Call council_await_peer to wait for ${view.reviewer}'s review.`,
+      });
+    } catch (error) {
+      return fail(error.message, { field: error.field ?? null });
+    }
+  },
+);
+
+server.registerTool(
+  "council_review",
+  {
+    title: "Review the drafted answer",
+    description:
+      "Approve the draft, or ask for specific changes. Only the reviewer may call this. " +
+      `The review budget is ${MAX_REVIEWS}; after that the latest draft ships as it stands.`,
+    inputSchema: {
+      goal_id: z.string(),
+      agent: z.enum(AGENTS),
+      verdict: z
+        .enum(DRAFT_VERDICTS)
+        .describe("APPROVE only if you would be content to have written it yourself."),
+      revisions: z
+        .string()
+        .max(LIMITS_DRAFT.revisions)
+        .optional()
+        .describe("Required with REVISE. Quote what to change and say what it should say."),
+    },
+  },
+  async ({ goal_id, agent, verdict, revisions }) => {
+    try {
+      const result = transact(db(), () => {
+        const council = getCouncil(db(), goal_id);
+        if (!council) throw new Error(`no council with goal_id ${goal_id}`);
+
+        const view = draftView(goal_id);
+        if (agent !== view.reviewer) {
+          throw new Error(`${view.reviewer} reviews this council; you are the drafter`);
+        }
+        if (view.phase === "final") {
+          throw new Error(`the answer is already final — ${view.final_reason}`);
+        }
+        if (view.phase !== "review") {
+          throw new Error("nothing to review yet: no draft has been submitted");
+        }
+
+        const clean = validateReview(verdict, revisions);
+        const latest = getLatestDraft(db(), goal_id);
+        reviewDraft(db(), goal_id, latest.revision, agent, verdict, clean);
+        return council;
+      });
+
+      const view = draftView(goal_id);
+      log(`review: ${goal_id} verdict=${verdict} by=${agent} phase=${view.phase}`);
+
+      return ok({
+        ok: true,
+        ...councilView(result),
+        ...view,
+        next_step:
+          view.phase === "final"
+            ? "The answer is final. Call council_close and show the user the answer."
+            : `Call council_await_peer to wait for ${view.drafter}'s revision.`,
+      });
+    } catch (error) {
+      return fail(error.message, { field: error.field ?? null });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // council_status
 // ---------------------------------------------------------------------------
 
@@ -453,14 +692,27 @@ server.registerTool(
       if (!council) return fail(goal_id ? `no council with goal_id ${goal_id}` : "no active council");
 
       const all = getAllEntries(db(), council.goal_id);
+      const drafts = getDrafts(db(), council.goal_id);
       const path = writeVerdict(council, all, null);
-      log(`close: ${council.goal_id} status=${council.status}`);
+      const answerPath = drafts.length ? writeAnswer(council, drafts) : null;
+      const view = council.status === "active" ? null : draftView(council.goal_id);
+      log(`close: ${council.goal_id} status=${council.status} drafts=${drafts.length}`);
+
+      const final = drafts.length ? drafts[drafts.length - 1] : null;
 
       return ok({
         ok: true,
         ...councilView(council),
         verdict_path: path,
+        answer_path: answerPath,
+        // The answer is the thing to show the user. The summary is the working behind it.
+        answer: final && view?.phase === "final" ? final.answer : null,
+        answer_status: view?.phase === "final" ? view.final_reason : (view?.phase ?? null),
         summary: summaryBlock(council, all, null),
+        next_step:
+          view && view.phase !== "final"
+            ? `The answer is not finished — waiting on ${view.next_actor} to ${view.phase}.`
+            : "Show the user the answer. The summary is the working behind it.",
       });
     } catch (error) {
       return fail(error.message);
