@@ -439,8 +439,7 @@ against the database — releases both sides on their next call.
 
 | Component | Notes |
 |---|---|
-| `council` MCP server | Python, stdio transport, SQLite storage. Five tools above. |
-| `stop-hook.sh` | One file, works unchanged in both apps, since Codex implements Claude Code's hook contract. Reads status and round from SQLite. Enforces `max_rounds` itself. |
+| `council` MCP server | Node, stdio transport, SQLite storage. Five tools above. |
 | `~/.claude/skills/council/SKILL.md` | Trigger, answer rules, round instructions, no-subagents rule |
 | `~/.codex/skills/council/SKILL.md` | Same, differing only in the subagent wording (Agent tool vs `spawn_agent`) |
 
@@ -456,13 +455,41 @@ Each phase leaves a working artifact.
 | **0** | Trivial `stop` hook installed in the Codex desktop app | Hook fires and blocks exit → Phase 4 is viable. It does not → Phase 4 is dropped and manual mode ships. |
 | **1** | Minimal MCP server, one `council_ping` tool, registered in both clients | Both apps list and call the tool. Settles Unverified #2 and measures Unverified #3 before any real work depends on it. |
 | **2** | Schema, SQLite, all five tools, stop rules | Two scripted clients drive a full council with no models involved: barrier holds, round-1 content is not readable early, duplicate submission is rejected, every stop rule fires |
-| **3** | Both `SKILL.md` files | **Working manual version.** `/council` typed once per round per window produces a complete record and verdict. |
-| **4** | `stop-hook.sh` in both apps | One trigger per window drives all rounds to a stop; setting `status` to `aborted` mid-run releases both within one poll |
+| **3** | Both `SKILL.md` files | A real council, one trigger per window, produces a complete record and verdict |
+| **4** | ~~`stop-hook.sh` in both apps~~ | **Dropped. Not needed — see below.** |
 | **5** | `verdict.md` rendering, summary block, polish | Verdict readable without opening the JSON |
 
-Phase 0 runs first because its result determines whether Phase 4 exists. Phase 1 runs
-before Phase 2 because a Codex app that cannot see the server invalidates the whole shape,
-and that is cheap to find out. Phase 3 is a usable product on its own.
+### Phase 4 was dropped — the problem it solved does not exist
+
+Phase 4 assumed a council would span several turns: a model submits, its turn ends, and
+something must wake it for the next round. The stop hook was that something.
+
+The first real council showed both models doing this instead, each inside a **single turn**:
+
+```
+council_open → council_submit → council_await_peer
+             → council_submit → council_await_peer
+             → council_submit → council_close
+```
+
+`council_await_peer` blocks. Blocking keeps the model in the same turn. There are no turn
+boundaries for a hook to survive, so the hook has nothing to do.
+
+The blocking-await design from Phase 2 removed the need for Phase 2's companion phase, and
+that went unnoticed until real models ran it. One trigger per window already drives every
+round to a verdict.
+
+What this deletes: `stop-hook.sh`, hook entries in both apps, the Codex hook-trust step,
+and the kill-switch machinery that existed to make a blocking hook safe to install. The
+`aborted` status remains as the kill switch for a running council, which is simpler and
+was needed anyway.
+
+Phase 0's result is not wasted — it is what proved the fallback was available, and its
+findings about `session_id` and silent hook-skipping are recorded above for whoever needs
+hooks later.
+
+Phase 1 ran before Phase 2 because a Codex app that could not see the server would have
+invalidated the whole shape, and that was cheap to find out.
 
 ## Deferred work
 
@@ -476,6 +503,11 @@ and that is cheap to find out. Phase 3 is a usable product on its own.
   would need rewriting.
 - **Unattended re-runs** (re-run a council when tests change). Genuine scheduling work, and
   `/loop` is the right tool. Separate feature.
+- **A stop hook for the stall case.** If a model ends its turn mid-council — hitting a
+  limit, or choosing to report progress — the peer waits out the five-minute timeout and
+  the council dies as `error`. A `Stop` hook could resume it. Phase 0 proved the mechanism
+  works in both apps and recorded the payload it receives. Not built, because the failure
+  has not been observed and the machinery is not free.
 
 ## Open decisions
 
