@@ -12,7 +12,8 @@
   },
   "scripts": {
     "test": "node --test 'test/*.test.js'",
-    "smoke": "node test/smoke.js"
+    "smoke": "node test/smoke.js",
+    "install-skills": "mkdir -p \"$HOME/.claude/skills/council\" \"$HOME/.codex/skills/council\" && cp skills/claude/SKILL.md \"$HOME/.claude/skills/council/SKILL.md\" && cp skills/codex/SKILL.md \"$HOME/.codex/skills/council/SKILL.md\" && echo 'skills installed to ~/.claude and ~/.codex'"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"
