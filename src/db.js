@@ -125,6 +125,7 @@ const SCHEMA = [
      needs_user       TEXT,
      author_readiness TEXT,
      decision         TEXT,
+     plan_digest      TEXT,
      created_at       TEXT NOT NULL,
      PRIMARY KEY (goal_id, seq)
    )`,
@@ -134,11 +135,22 @@ const SCHEMA = [
   "CREATE INDEX IF NOT EXISTS plan_councils_by_status ON plan_councils (status)",
 ];
 
+// Columns added after a table shipped. CREATE TABLE IF NOT EXISTS does nothing to a table
+// that already exists, so a database in the wild keeps the old shape until it is altered.
+const MIGRATIONS = [["plan_steps", "plan_digest", "TEXT"]];
+
 export function openDatabase(path) {
   mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   for (const pragma of PRAGMAS) db.prepare(pragma).get();
   for (const statement of SCHEMA) db.prepare(statement).run();
+
+  for (const [table, column, type] of MIGRATIONS) {
+    const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+    if (columns.length && !columns.some((c) => c.name === column)) {
+      db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run();
+    }
+  }
   return db;
 }
 
@@ -452,8 +464,8 @@ export function appendPlanStep(db, goalId, step) {
     `INSERT INTO plan_steps
        (goal_id, seq, round, kind, actor, critique, blockers, highs, mediums, lows,
         critic_readiness, applied, rejected, additional, needs_user, author_readiness,
-        decision, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        decision, plan_digest, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     goalId,
     seq,
@@ -472,6 +484,7 @@ export function appendPlanStep(db, goalId, step) {
     step.needs_user ?? null,
     step.author_readiness ?? null,
     step.decision ?? null,
+    step.plan_digest ?? null,
     now(),
   );
   return seq;

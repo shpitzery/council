@@ -23,8 +23,19 @@ The user runs this skill in both windows.
    start Codex in your other window". That handoff is the point: they trigger the second
    window only once this one is ready for it.
 
-   A council already open on this same plan is resumed, not cleared, so re-running the skill
-   picks up where you left off.
+   **If the reply carries `resuming`, stop there and ask.** A council on this plan already
+   has work in it. Show the user the round, how old it is, what the waiting critique found,
+   and whether `plan_changed_since_critique` is true — then ask: resume, or start over?
+   Starting over means calling `plan_council_open` again with `fresh: true`, which discards
+   that council and everything in it.
+
+   Do not resolve, critique or abandon anything before they answer. Resuming without saying
+   so is how a session ends up applying a critique the user thought was gone; starting over
+   without asking throws away work Codex may have spent ten minutes on.
+
+   `plan_changed_since_critique: true` matters most: the critique was written against a
+   version of the plan that no longer exists, so parts of it may object to text you have
+   already rewritten. Lead with that when it is true.
 2. **`plan_council_await`** — blocks until Codex's critique lands. **`retry: true` means
    call it again, and keep calling.** See below — this is the step that goes wrong.
 3. Read `latest_critique`. **Run your `plan-critique-resolver` skill** with that critique

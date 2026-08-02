@@ -5,7 +5,7 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { rmSync, readFileSync } from "node:fs";
+import { rmSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { makeRoot, connect, call, entry, filesIn } from "./harness.js";
 
 const critique = (over = {}) => ({
@@ -633,6 +633,71 @@ describe("a recent council is never swept", () => {
     assert.equal(second.payload.goal_id, first.payload.goal_id, "must not start a second");
     assert.equal(second.payload.cleared, undefined);
     assert.match(second.payload.warning, /you asked for \/proj\/docs\/different\.md/);
+  });
+});
+
+// Picking up existing work is the user's call, not the model's: resuming silently confuses,
+// and starting over silently throws away a critique the peer paid real time for.
+describe("resuming an existing council", () => {
+  let root, claude, codex, goalId, planFile;
+
+  before(async () => {
+    root = makeRoot("plan-resume");
+    mkdirSync(root, { recursive: true });
+    planFile = join(root, "the-plan.md");
+    writeFileSync(planFile, "# Plan\n\nStep one.\n");
+
+    claude = await connect("claude", root);
+    codex = await connect("codex", root);
+    goalId = (await open(claude, "claude", { plan_path: planFile })).payload.goal_id;
+    await open(codex, "codex", { plan_path: planFile });
+    await call(codex, "plan_council_critique", { goal_id: goalId, agent: "codex", ...critique() });
+  });
+
+  after(async () => {
+    await claude?.close();
+    await codex?.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("the author is told to stop and ask, not to act", async () => {
+    const { payload } = await open(claude, "claude", { plan_path: planFile });
+    assert.equal(payload.goal_id, goalId);
+    assert.equal(payload.resuming.round, 1);
+    assert.equal(payload.resuming.phase, "resolve");
+    assert.equal(payload.resuming.waiting_critique, "1 Blocker, 0 High, 0 Medium, 0 Low — Not ready");
+    assert.equal(payload.resuming.plan_changed_since_critique, false);
+    assert.match(payload.next_step, /Stop\. Do not resolve or critique anything yet/);
+    assert.equal(payload.instruction, undefined, "no contradictory order to run the resolver");
+  });
+
+  test("a plan rewritten since the critique is called out", async () => {
+    writeFileSync(planFile, "# Plan\n\nA completely different step one.\n");
+    const { payload } = await open(claude, "claude", { plan_path: planFile });
+    assert.equal(payload.resuming.plan_changed_since_critique, true);
+    assert.match(payload.next_step, /plan file HAS changed since that critique/);
+  });
+
+  test("the critic is not asked — it just joins and works", async () => {
+    const { payload } = await open(codex, "codex", { plan_path: planFile });
+    assert.equal(payload.resuming, undefined);
+    assert.equal(payload.goal_id, goalId);
+  });
+
+  test("fresh discards it and starts again at round 1", async () => {
+    const { payload } = await open(claude, "claude", { plan_path: planFile, fresh: true });
+    assert.notEqual(payload.goal_id, goalId, "a new council, not the old one");
+    assert.equal(payload.round, 1);
+    assert.equal(payload.critiques_so_far, 0);
+    assert.equal(payload.resuming, undefined);
+    assert.equal(payload.cleared.length, 1);
+    assert.equal(payload.cleared[0].goal_id, goalId);
+  });
+
+  test("a council with nothing in it resumes without asking", async () => {
+    const { payload } = await open(claude, "claude", { plan_path: planFile });
+    assert.equal(payload.resuming, undefined, "nothing at stake, nothing to ask about");
+    assert.equal(payload.critiques_so_far, 0);
   });
 });
 

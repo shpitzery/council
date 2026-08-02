@@ -5,6 +5,8 @@
 // rather than imported, so nothing over there has to be rearranged to make room.
 
 import { z } from "zod";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 import {
   transact,
@@ -44,6 +46,24 @@ import {
 } from "./render.js";
 
 const AGENTS = [AUTHOR, CRITIC];
+
+/**
+ * A fingerprint of the plan file as it stands right now.
+ *
+ * Recorded with every step so a resume can tell whether the plan has moved since the
+ * critique was written. Resolving a critique against a plan that has since been rewritten
+ * produces confident objections to paragraphs that no longer exist.
+ *
+ * Null when the file cannot be read — the council never depends on reading the plan, so an
+ * unreadable one is a missing check rather than a failure.
+ */
+function planDigest(path) {
+  try {
+    return createHash("sha256").update(readFileSync(path)).digest("hex").slice(0, 16);
+  } catch {
+    return null;
+  }
+}
 
 // Anything the kill switch or a stall can set. An await must release on all of them.
 const TERMINAL = ["ready", "capped", "error", "aborted"];
@@ -232,15 +252,23 @@ export function registerPlanTools(server, deps) {
           ),
         git_branch: z.string().optional(),
         max_rounds: z.number().int().min(1).max(10).optional().describe("Default 4."),
+        fresh: z
+          .boolean()
+          .optional()
+          .describe(
+            "Abandon any council already running on this plan and start again at round 1. " +
+              "Only pass this when the user has said so — it discards a critique the peer " +
+              "may already have spent real work on.",
+          ),
       },
     },
-    async ({ agent, plan_path, project_path, git_branch, max_rounds = 4 }) => {
+    async ({ agent, plan_path, project_path, git_branch, max_rounds = 4, fresh = false }) => {
       try {
         // Starting a run clears what a dead session left behind, so the user does not have
         // to. Only the author, only when actually starting (a plan_path is given), and only
         // for work that has sat untouched — anything recent might be a peer mid-turn, and a
         // council on this same plan is a resume rather than a leftover.
-        const cleared = agent === AUTHOR && plan_path ? sweepStale(plan_path) : [];
+        const cleared = agent === AUTHOR && plan_path ? sweepStale(plan_path, fresh) : [];
 
         // One council at a time, across both modes. A debate council mid-flight means a
         // peer is blocked waiting on this agent; starting a plan council here would strand
@@ -305,9 +333,32 @@ export function registerPlanTools(server, deps) {
 
         // Asked for one plan, joined a council about another. Silently handing back the
         // running council would have the model critiquing a file nobody mentioned.
+        // The author is picking up work that already exists. That is their decision to
+        // make, not the model's: resuming silently confuses, and starting over silently
+        // throws away a critique the peer may have spent real work on.
+        const offer = agent === AUTHOR && !fresh ? resumeOffer(council) : null;
+
         const wrongPlan = plan_path && plan_path !== council.plan_path;
         return reply(council, agent, {
           ...(cleared.length ? { cleared } : {}),
+          ...(offer
+            ? {
+                resuming: offer,
+                // Suppressed on purpose: "run the resolver" and "stop and ask" are
+                // contradictory orders, and the model would follow the concrete one.
+                instruction: undefined,
+                next_step:
+                  "Stop. Do not resolve or critique anything yet. Show the user what is in " +
+                  "`resuming` — the round, how old it is, what the waiting critique found, " +
+                  "and whether the plan file changed since — then ask whether to resume or " +
+                  "start over. Start over means calling plan_council_open again with " +
+                  "fresh:true, which discards this council." +
+                  (offer.plan_changed_since_critique === true
+                    ? " The plan file HAS changed since that critique was written, so parts " +
+                      "of it may object to text that no longer exists. Say so first."
+                    : ""),
+              }
+            : {}),
           ...(wrongPlan
             ? {
                 warning:
@@ -368,11 +419,10 @@ export function registerPlanTools(server, deps) {
             );
           }
 
-          const seq = appendPlanStep(
-            db(),
-            goal_id,
-            validateCritique(fields, council, state.round),
-          );
+          const seq = appendPlanStep(db(), goal_id, {
+            ...validateCritique(fields, council, state.round),
+            plan_digest: planDigest(council.plan_path),
+          });
           sync(council);
           return { seq, round: state.round };
         });
@@ -447,7 +497,10 @@ export function registerPlanTools(server, deps) {
             );
           }
 
-          const seq = appendPlanStep(db(), goal_id, validateResolve(fields, state.round));
+          const seq = appendPlanStep(db(), goal_id, {
+            ...validateResolve(fields, state.round),
+            plan_digest: planDigest(council.plan_path),
+          });
           sync(council);
           return { seq, round: state.round };
         });
@@ -696,6 +749,37 @@ export function registerPlanTools(server, deps) {
   );
 
   /**
+   * What an author is being asked to resume, when there is real work at stake.
+   *
+   * Only built when steps exist — a council with nothing in it has nothing to lose, so
+   * asking about it is noise. Returns null otherwise.
+   */
+  function resumeOffer(council) {
+    const all = steps(council.goal_id);
+    if (!all.length) return null;
+
+    const state = planState(all, council.max_rounds);
+    const critique = [...all].reverse().find((s) => s.kind === "critique") ?? null;
+    const last = all.at(-1);
+    const current = planDigest(council.plan_path);
+
+    return {
+      round: state.round,
+      phase: state.phase,
+      next_actor: state.actor ?? null,
+      minutes_old: Math.round((Date.now() - new Date(last.created_at).getTime()) / 60_000),
+      waiting_critique: critique
+        ? `${critique.blockers} Blocker, ${critique.highs} High, ${critique.mediums} ` +
+          `Medium, ${critique.lows} Low — ${critique.critic_readiness}`
+        : null,
+      // Null on either side means the check could not run, which is not the same as
+      // "unchanged" and must not be reported as it.
+      plan_changed_since_critique:
+        critique?.plan_digest && current ? critique.plan_digest !== current : null,
+    };
+  }
+
+  /**
    * Clear what a dead session left behind, and report it.
    *
    * A plan council about the *same* plan is never swept, however old: that is the user
@@ -703,15 +787,20 @@ export function registerPlanTools(server, deps) {
    * has to have sat untouched past the stale threshold, so a peer taking its time in the
    * other window is never mistaken for a leftover.
    */
-  function sweepStale(planPath) {
+  function sweepStale(planPath, force = false) {
     const cleared = [];
 
     for (let guard = 0; guard < 10; guard += 1) {
       const council = getUnfinishedPlanCouncil(db());
-      if (!council || council.plan_path === planPath) break;
+      if (!council) break;
+
+      // `force` is the user saying start over, which is the only thing that overrides the
+      // same-plan protection. Without it, a council on this plan is a resume.
+      const sameplan = council.plan_path === planPath;
+      if (sameplan && !force) break;
 
       const idle = Date.now() - lastActivityAt(council, steps(council.goal_id));
-      if (idle <= staleAfterMs) break;
+      if (!force && idle <= staleAfterMs) break;
 
       const minutes = Math.round(idle / 60_000);
       const was = council.status;
@@ -720,8 +809,10 @@ export function registerPlanTools(server, deps) {
           db(),
           council.goal_id,
           "aborted",
-          `cleared automatically: unfinished and untouched for ${minutes} minutes when a ` +
-            "new plan council was started on a different plan",
+          force
+            ? `cleared on request: the user asked to start again on ${planPath}`
+            : `cleared automatically: unfinished and untouched for ${minutes} minutes when ` +
+              "a new plan council was started on a different plan",
         ),
       );
       cleared.push({
