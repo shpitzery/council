@@ -83,6 +83,16 @@ const POLL_INTERVAL_MS = num("COUNCIL_POLL_INTERVAL_MS", 1_500);
 // Measured from the agent's own submission for this round.
 const TOTAL_WAIT_MS = num("COUNCIL_TOTAL_WAIT_MS", 5 * 60_000);
 
+// The plan council waits on different work and needs different numbers.
+//
+// Five minutes is right for a peer that never showed up: nobody is coming, and the window
+// was never triggered. It is badly wrong for a peer that has joined, because a step there
+// is a research task — running critique-plan against a whole codebase — not a submission.
+// The first real run would have killed a healthy council mid-critique on the five-minute
+// figure, throwing away work the critic had already done.
+const PLAN_JOIN_WAIT_MS = num("COUNCIL_PLAN_JOIN_WAIT_MS", 5 * 60_000);
+const PLAN_STEP_WAIT_MS = num("COUNCIL_PLAN_STEP_WAIT_MS", 30 * 60_000);
+
 const log = (...args) => console.error("[council]", ...args);
 
 let database = null;
@@ -223,8 +233,10 @@ server.registerTool(
         return fail(
           `a plan council is unfinished: ${brief.goal_id} (${brief.status}, ` +
             `${brief.phase} owed by ${brief.next_actor ?? "the user"}). Finish it with ` +
-            "plan_council_open, or release it with council_abandon, before starting a council.",
-          { blocking: brief },
+            "plan_council_open, or release it with council_abandon, before starting a " +
+            "council. plan_council_close does not release anything — it only renders the " +
+            "trail — so calling it here will leave you blocked.",
+          { blocking: brief, release_with: "council_abandon" },
         );
       }
 
@@ -974,7 +986,8 @@ registerPlanTools(server, {
   log,
   pollBudgetMs: POLL_BUDGET_MS,
   pollIntervalMs: POLL_INTERVAL_MS,
-  totalWaitMs: TOTAL_WAIT_MS,
+  joinWaitMs: PLAN_JOIN_WAIT_MS,
+  stepWaitMs: PLAN_STEP_WAIT_MS,
   unfinishedDebateCouncil: unfinishedCouncilForAgent,
 });
 

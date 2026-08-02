@@ -92,6 +92,17 @@ const SCHEMA = [
      updated_at   TEXT NOT NULL
    )`,
 
+  // Who has actually shown up. The roles are fixed, so this is not needed to assign them —
+  // it exists so "the peer is still working" can be told apart from "the peer was never
+  // triggered". Without it both look identical from the other window, and an agent that
+  // guesses between them states the guess as fact.
+  `CREATE TABLE IF NOT EXISTS plan_participants (
+     goal_id   TEXT NOT NULL REFERENCES plan_councils(goal_id) ON DELETE CASCADE,
+     agent     TEXT NOT NULL,
+     joined_at TEXT NOT NULL,
+     PRIMARY KEY (goal_id, agent)
+   )`,
+
   // Append-only. The phase is derived from the last row, the way draftState derives the
   // drafting phase from `drafts`. Append-only is what lets the author resolve twice in one
   // round — once on the critique, again on the user's decision — without either overwriting
@@ -401,6 +412,19 @@ export function createPlanCouncil(db, { goalId, planPath, projectPath, gitBranch
      VALUES (?, ?, ?, ?, 1, ?, 'active', ?, ?)`,
   ).run(goalId, planPath, projectPath, gitBranch ?? null, maxRounds, ts, ts);
   return getPlanCouncil(db, goalId);
+}
+
+export function joinPlanCouncil(db, goalId, agent) {
+  db.prepare(
+    `INSERT INTO plan_participants (goal_id, agent, joined_at) VALUES (?, ?, ?)
+     ON CONFLICT (goal_id, agent) DO NOTHING`,
+  ).run(goalId, agent, now());
+}
+
+export function getPlanParticipants(db, goalId) {
+  return db
+    .prepare("SELECT * FROM plan_participants WHERE goal_id = ? ORDER BY agent")
+    .all(goalId);
 }
 
 export function getPlanSteps(db, goalId) {

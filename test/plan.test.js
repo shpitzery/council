@@ -61,10 +61,19 @@ describe("a plan council, end to end, with no models", () => {
     goalId = payload.goal_id;
   });
 
+  test("the author can tell the critic has not arrived yet", async () => {
+    const { payload } = await call(claude, "plan_council_open", { agent: "claude" });
+    assert.deepEqual(payload.participants, ["claude"]);
+    assert.equal(payload.peer_joined, false);
+    assert.match(payload.next_step, /codex has not joined yet/);
+  });
+
   test("the critic joins it rather than starting another, and is told what to run", async () => {
     const { payload } = await open(codex, "codex");
     assert.equal(payload.goal_id, goalId);
     assert.equal(payload.your_role, "critic");
+    assert.equal(payload.peer_joined, true);
+    assert.deepEqual(payload.participants, ["claude", "codex"]);
     assert.match(payload.instruction, /Run your `critique-plan` skill/);
   });
 
@@ -375,29 +384,91 @@ describe("the round cap", () => {
   });
 });
 
-describe("a peer that stops responding", () => {
-  let root, claude, codex, goalId;
+describe("a peer that never joined", () => {
+  let root, claude, goalId;
 
   before(async () => {
-    root = makeRoot("plan-stall");
-    process.env.COUNCIL_TOTAL_WAIT_MS = "1";
+    root = makeRoot("plan-nojoin");
+    process.env.COUNCIL_PLAN_JOIN_WAIT_MS = "1";
     claude = await connect("claude", root);
-    codex = await connect("codex", root);
     goalId = (await open(claude, "claude")).payload.goal_id;
   });
 
   after(async () => {
-    delete process.env.COUNCIL_TOTAL_WAIT_MS;
+    delete process.env.COUNCIL_PLAN_JOIN_WAIT_MS;
+    await claude?.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("the author is released and told the window was never triggered", async () => {
+    const { payload } = await call(claude, "plan_council_await", { goal_id: goalId, agent: "claude" });
+    assert.equal(payload.retry, false);
+    assert.equal(payload.status, "error");
+    assert.equal(payload.peer_joined, false);
+    assert.match(payload.stop_reason, /codex never joined/);
+    assert.match(payload.note, /run the skill in that window/);
+  });
+});
+
+// The first real run: Codex joined and spent minutes reading the plan against the codebase.
+// On one shared five-minute budget the server would have killed a healthy council mid-
+// critique and thrown that work away. A joined peer gets the long budget.
+describe("a joined peer that is still working", () => {
+  let root, claude, codex, goalId;
+
+  before(async () => {
+    root = makeRoot("plan-working");
+    // The join budget is expired from the start. It must not apply once codex is present.
+    process.env.COUNCIL_PLAN_JOIN_WAIT_MS = "1";
+    claude = await connect("claude", root);
+    codex = await connect("codex", root);
+    goalId = (await open(claude, "claude")).payload.goal_id;
+    await open(codex, "codex");
+  });
+
+  after(async () => {
+    delete process.env.COUNCIL_PLAN_JOIN_WAIT_MS;
     await claude?.close();
     await codex?.close();
     rmSync(root, { recursive: true, force: true });
   });
 
-  test("the author is released and told the plan file is untouched", async () => {
+  test("is not timed out, and the author is told to keep waiting", async () => {
+    const { payload } = await call(claude, "plan_council_await", { goal_id: goalId, agent: "claude" });
+    assert.equal(payload.status, "active", "a working peer must not be errored");
+    assert.equal(payload.retry, true);
+    assert.equal(payload.peer_joined, true);
+    assert.match(payload.note, /keep calling while it answers retry:true/);
+    assert.match(payload.note, /do not decide the peer is absent/);
+    assert.match(payload.note, /codex has joined and is working/);
+    assert.ok(payload.minutes_left > 0);
+  });
+});
+
+describe("a joined peer that goes silent", () => {
+  let root, claude, codex, goalId;
+
+  before(async () => {
+    root = makeRoot("plan-silent");
+    process.env.COUNCIL_PLAN_STEP_WAIT_MS = "1";
+    claude = await connect("claude", root);
+    codex = await connect("codex", root);
+    goalId = (await open(claude, "claude")).payload.goal_id;
+    await open(codex, "codex");
+  });
+
+  after(async () => {
+    delete process.env.COUNCIL_PLAN_STEP_WAIT_MS;
+    await claude?.close();
+    await codex?.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("eventually times out, saying it joined rather than never came", async () => {
     const { payload } = await call(claude, "plan_council_await", { goal_id: goalId, agent: "claude" });
     assert.equal(payload.retry, false);
     assert.equal(payload.status, "error");
-    assert.match(payload.stop_reason, /codex did not critique round 1/);
+    assert.match(payload.stop_reason, /codex joined but did not critique round 1/);
     assert.match(payload.note, /plan file keeps every fix applied/);
   });
 });

@@ -13,6 +13,8 @@ import {
   getLatestPlanCouncil,
   createPlanCouncil,
   getPlanSteps,
+  joinPlanCouncil,
+  getPlanParticipants,
   appendPlanStep,
   setPlanStatus,
   setPlanRound,
@@ -47,8 +49,18 @@ const AGENTS = [AUTHOR, CRITIC];
 const TERMINAL = ["ready", "capped", "error", "aborted"];
 
 export function registerPlanTools(server, deps) {
-  const { db, ok, fail, sleep, log, pollBudgetMs, pollIntervalMs, totalWaitMs, unfinishedDebateCouncil } =
-    deps;
+  const {
+    db,
+    ok,
+    fail,
+    sleep,
+    log,
+    pollBudgetMs,
+    pollIntervalMs,
+    joinWaitMs,
+    stepWaitMs,
+    unfinishedDebateCouncil,
+  } = deps;
 
   const steps = (goalId) => getPlanSteps(db(), goalId);
   const stateOf = (council) => planState(steps(council.goal_id), council.max_rounds);
@@ -77,11 +89,14 @@ export function registerPlanTools(server, deps) {
     return state;
   }
 
+  const joined = (goalId) => getPlanParticipants(db(), goalId).map((p) => p.agent);
+
   function view(council, agent) {
     const all = steps(council.goal_id);
     const state = planState(all, council.max_rounds);
     const critique = [...all].reverse().find((s) => s.kind === "critique") ?? null;
     const resolution = [...all].reverse().find((s) => s.kind === "resolve") ?? null;
+    const here = joined(council.goal_id);
 
     return {
       goal_id: council.goal_id,
@@ -96,6 +111,10 @@ export function registerPlanTools(server, deps) {
       author: AUTHOR,
       critic: CRITIC,
       your_role: agent === AUTHOR ? "author" : "critic",
+      participants: here,
+      // Whether the peer is in the room at all. "Still working" and "never triggered" look
+      // identical without this, and the difference decides whether waiting is worthwhile.
+      peer_joined: here.includes(agent === AUTHOR ? CRITIC : AUTHOR),
       phase: state.phase,
       next_actor: state.actor ?? null,
       critiques_so_far: all.filter((s) => s.kind === "critique").length,
@@ -142,7 +161,14 @@ export function registerPlanTools(server, deps) {
         ? `Critique the plan for round ${state.round} with plan_council_critique.`
         : `Resolve round ${state.round}'s critique with plan_council_resolve.`;
     }
-    return `Waiting on ${state.actor} to ${state.phase}. Call plan_council_await.`;
+    return (
+      `Waiting on ${state.actor} to ${state.phase}. Call plan_council_await, and keep ` +
+      "calling it while it answers retry:true — the server ends the wait itself. " +
+      (joined(council.goal_id).includes(state.actor)
+        ? `${state.actor} has joined and is working; a real critique against a codebase ` +
+          "takes many minutes."
+        : `${state.actor} has not joined yet — tell the user to run the skill in that window.`)
+    );
   }
 
   const reply = (council, agent, extra = {}) => {
@@ -195,14 +221,19 @@ export function registerPlanTools(server, deps) {
         if (debate) {
           return fail(
             `you have an unfinished council: ${debate.goal_id} (${debate.status}). ` +
-              "Finish it, or release it with council_abandon, before starting a plan council.",
-            { blocking_goal_id: debate.goal_id, blocking_mode: "council" },
+              "Finish it, or release it with council_abandon, before starting a plan " +
+              "council. council_close does not release anything — it only renders the " +
+              "record — so calling it here will leave you blocked.",
+            { blocking_goal_id: debate.goal_id, blocking_mode: "council", release_with: "council_abandon" },
           );
         }
 
         const council = transact(db(), () => {
           const existing = getUnfinishedPlanCouncil(db());
-          if (existing) return existing;
+          if (existing) {
+            joinPlanCouncil(db(), existing.goal_id, agent);
+            return existing;
+          }
 
           if (!plan_path) throw new Error("plan_path is required when starting a plan council");
           if (!project_path) {
@@ -215,13 +246,15 @@ export function registerPlanTools(server, deps) {
             (candidate) =>
               getPlanCouncil(db(), candidate) !== null || getCouncil(db(), candidate) !== null,
           );
-          return createPlanCouncil(db(), {
+          const fresh = createPlanCouncil(db(), {
             goalId: id,
             planPath: plan_path,
             projectPath: project_path,
             gitBranch: git_branch,
             maxRounds: max_rounds,
           });
+          joinPlanCouncil(db(), id, agent);
+          return fresh;
         });
 
         writePlanBrief(council);
@@ -437,28 +470,42 @@ export function registerPlanTools(server, deps) {
             return reply(council, agent, { arrived: true, retry: false });
           }
 
-          // The peer has stopped answering. Unlike the debate mode's drafting phase there
-          // is no artifact to rescue: every fix already applied lives in the plan file,
-          // which is untouched by this.
+          // Two different waits, because "nobody is coming" and "somebody is working" are
+          // different failures with different right answers.
+          //
+          // A step here is a research task — reading a plan against a whole codebase — not
+          // a submission. Timing it out on the debate mode's five minutes would kill a
+          // healthy council mid-critique and throw away work already done, which is exactly
+          // what the first real run would have hit had the author kept polling.
+          const peerHere = joined(goal_id).includes(state.actor);
+          const budget = peerHere ? stepWaitMs : joinWaitMs;
           const since = all.length
             ? new Date(all.at(-1).created_at).getTime()
             : new Date(council.started_at).getTime();
-          if (Date.now() - since > totalWaitMs) {
+
+          if (Date.now() - since > budget) {
+            const minutes = Math.round(budget / 60_000);
             transact(db(), () =>
               setPlanStatus(
                 db(),
                 goal_id,
                 "error",
-                `${state.actor} did not ${state.phase} round ${state.round} within 5 minutes`,
+                peerHere
+                  ? `${state.actor} joined but did not ${state.phase} round ${state.round} ` +
+                    `within ${minutes} minutes`
+                  : `${state.actor} never joined — the skill was probably never run in that ` +
+                    `window (waited ${minutes} minutes)`,
               ),
             );
             const stalled = getPlanCouncil(db(), goal_id);
             return reply(stalled, agent, {
               arrived: false,
               retry: false,
-              note:
-                `${state.actor} stopped responding. The plan file keeps every fix applied ` +
-                "so far; the trail is still readable.",
+              note: peerHere
+                ? `${state.actor} stopped responding. The plan file keeps every fix applied ` +
+                  "so far; the trail is still readable."
+                : `${state.actor} never joined. Tell the user to run the skill in that window, ` +
+                  "then start a fresh plan council.",
             });
           }
 
@@ -467,11 +514,28 @@ export function registerPlanTools(server, deps) {
 
         const council = getPlanCouncil(db(), goal_id);
         const state = stateOf(council);
+        const peerHere = joined(goal_id).includes(state.actor);
+        const all = steps(goal_id);
+        const since = all.length
+          ? new Date(all.at(-1).created_at).getTime()
+          : new Date(council.started_at).getTime();
+        const left = Math.max(0, (peerHere ? stepWaitMs : joinWaitMs) - (Date.now() - since));
+
         return reply(council, agent, {
           arrived: false,
           retry: true,
           waited_seconds: Math.round(pollBudgetMs / 1000),
-          note: `waiting on ${state.actor} to ${state.phase}. Call plan_council_await again.`,
+          minutes_left: Math.round(left / 60_000),
+          // Say this every time. Deciding for yourself that the peer is absent, after a
+          // couple of polls, is how the first real run ended: the author gave up at 2.5
+          // minutes and told the user Codex had not joined, while Codex was mid-critique.
+          note:
+            `Waiting on ${state.actor} to ${state.phase}. Call plan_council_await again — ` +
+            "keep calling while it answers retry:true. The server ends the wait itself; do " +
+            "not decide the peer is absent. " +
+            (peerHere
+              ? `${state.actor} has joined and is working.`
+              : `${state.actor} has not joined — tell the user to run the skill in that window.`),
         });
       } catch (error) {
         return fail(error.message);

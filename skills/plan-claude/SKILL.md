@@ -18,8 +18,8 @@ The user runs this skill in both windows.
 
 1. **`plan_council_open`** — `agent: "claude"`, plus `plan_path` and `project_path`. If
    Codex opened it first you join it.
-2. **`plan_council_await`** — blocks until Codex's critique lands. `retry: true` means call
-   it again.
+2. **`plan_council_await`** — blocks until Codex's critique lands. **`retry: true` means
+   call it again, and keep calling.** See below — this is the step that goes wrong.
 3. Read `latest_critique`. **Run your `plan-critique-resolver` skill** with that critique
    text and the plan file. It does the work: verifies each point against the code, edits
    the plan file surgically, and produces the five output blocks.
@@ -35,6 +35,22 @@ Every reply carries `next_step` and, when it is your move, `instruction`. Follow
 It does not critique, resolve, or edit anything. `plan-critique-resolver` does all of that
 and is the skill you are wrapping — do not restate its rules here or work around them. This
 one only carries text between the two windows, counts rounds, and records the trail.
+
+## Waiting is most of this skill
+
+**Keep calling `plan_council_await` while it answers `retry: true`.** Each call returns
+after about 50 seconds; that is the tool's limit, not a verdict about Codex. The server ends
+the wait itself and tells you when it has. Three polls is not "Codex isn't coming" — it is
+two and a half minutes.
+
+**A real critique takes many minutes.** Codex is reading your plan against the actual
+codebase — source files, contract docs, git state. That is the whole value of this loop.
+Expect ten minutes; the server allows thirty.
+
+**Never announce that Codex is absent unless `peer_joined` is `false`.** That field is why
+it exists: it distinguishes "still working" from "never triggered", which are identical from
+where you sit. Reporting a working peer as missing is a false statement to the user, and it
+ends the run for no reason. It has already happened once.
 
 ## Rules the server cannot enforce
 
@@ -72,8 +88,10 @@ trail at `record_path` is the working behind it.
 ## When something goes wrong
 
 **One council at a time, across both modes.** A plan council blocks `/council` and the other
-way round. `council_abandon` is the release for either — call it with a reason if the plan
-was wrong, Codex never joined, or the user changed their mind.
+way round. **`council_abandon` is the only release** — call it with a reason if the plan was
+wrong, Codex never joined, or the user changed their mind. `council_close` and
+`plan_council_close` render records; they release nothing, so calling them on a blocking
+council leaves you exactly as blocked as before.
 
 **No subagents for the protocol itself.** Do not hand the council loop to the Agent tool.
 `plan-critique-resolver` calling its own `plan-readiness-verifier` is that skill's business

@@ -27,8 +27,11 @@ The user runs this skill in both windows.
 3. **`plan_council_critique`** — submit that output. `critique` ← the findings in full,
    `blockers`/`highs`/`mediums`/`lows` ← how many of each severity, `readiness` ← the
    Readiness line.
-4. **`plan_council_await`** — blocks until Claude's resolution lands. `retry: true` means
-   call it again.
+4. **`plan_council_await`** — blocks until Claude's resolution lands. **`retry: true` means
+   call it again, and keep calling** while it says so. Each call returns after about 50
+   seconds; that is the tool's limit, not a verdict about Claude. The server ends the wait
+   itself. `peer_joined` tells you whether Claude is there at all — do not report it missing
+   while that says `true`.
 5. Read `latest_resolution`: what was applied, and what was rejected and why. Then re-read
    the plan file — it has changed on disk — and go back to step 2.
 
@@ -74,9 +77,15 @@ is the working behind it.
 
 ## When something goes wrong
 
+**Take the time you need.** The server allows thirty minutes per step once you have joined.
+Reading the plan against the real code is the point; do not rush a critique to look
+responsive.
+
 **One council at a time, across both modes.** A plan council blocks `/council` and the other
-way round. `council_abandon` is the release for either — call it with a reason if the plan
-was wrong, Claude never joined, or the user changed their mind.
+way round. **`council_abandon` is the only release** — call it with a reason if the plan was
+wrong, Claude never joined, or the user changed their mind. `council_close` and
+`plan_council_close` render records; they release nothing, so calling them on a blocking
+council leaves you exactly as blocked as before.
 
 **No subagents.** Do not use `spawn_agent` for any part of this. A subagent lacks the
 session context that is the whole reason you were asked, and its critique would be returned
