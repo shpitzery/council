@@ -32,9 +32,15 @@ import {
   getLatestDraft,
   insertDraft,
   reviewDraft,
+  getPlanCouncil,
+  getUnfinishedPlanCouncil,
+  setPlanStatus,
+  getPlanSteps,
   VERDICTS,
   CONFIDENCES,
 } from "./db.js";
+import { registerPlanTools } from "./plan.js";
+import { planState } from "./plan-rules.js";
 import {
   validateSubmission,
   evaluateStopRules,
@@ -123,6 +129,23 @@ function unfinishedCouncilForAgent(agent) {
   return null;
 }
 
+/**
+ * A one-line description of an unfinished plan council, for the rules that have to see
+ * across both modes: the one-at-a-time guard, the kill switch, and council_status.
+ */
+function planCouncilBrief(council) {
+  const state = planState(getPlanSteps(db(), council.goal_id), council.max_rounds);
+  return {
+    goal_id: council.goal_id,
+    mode: "plan_council",
+    plan_path: council.plan_path,
+    status: council.status,
+    phase: state.phase,
+    next_actor: state.actor ?? null,
+    round: state.round,
+  };
+}
+
 /** Whose move it is in the drafting phase, plus the instruction for that move. */
 function draftView(goalId) {
   const drafter = getDrafter(db(), goalId);
@@ -187,6 +210,24 @@ server.registerTool(
   },
   async ({ agent, question, project_path, git_branch, max_rounds = 3, goal_id }) => {
     try {
+      // One council at a time holds across both modes, not just this one. A plan council
+      // mid-loop means the peer is waiting on a critique or a resolution; starting a debate
+      // council here would strand it.
+      //
+      // This fails rather than returning the plan council the way an unfinished debate
+      // council is returned: the two payloads are different shapes, and a plan council
+      // handed back from council_open would be read as a debate council to submit into.
+      const plan = getUnfinishedPlanCouncil(db());
+      if (plan) {
+        const brief = planCouncilBrief(plan);
+        return fail(
+          `a plan council is unfinished: ${brief.goal_id} (${brief.status}, ` +
+            `${brief.phase} owed by ${brief.next_actor ?? "the user"}). Finish it with ` +
+            "plan_council_open, or release it with council_abandon, before starting a council.",
+          { blocking: brief },
+        );
+      }
+
       const result = transact(db(), () => {
         // Joining a named council.
         if (goal_id) {
@@ -725,15 +766,36 @@ server.registerTool(
     description:
       "Give up on a council that cannot finish — the peer never joined, the question was " +
       "wrong, or the user changed their mind. The record is kept and stays readable. Use " +
-      "this before starting a different council, since an unfinished one blocks new ones.",
+      "this before starting a different council, since an unfinished one blocks new ones. " +
+      "This is the kill switch for both modes: plan councils are released the same way.",
     inputSchema: {
       agent: z.enum(AGENTS),
       reason: z.string().max(500).describe("Why. This is recorded."),
-      goal_id: z.string().optional().describe("Defaults to your unfinished council."),
+      goal_id: z.string().optional().describe("Defaults to your unfinished council, of either mode."),
     },
   },
   async ({ agent, reason, goal_id }) => {
     try {
+      // One kill switch for both modes. Two would be one more than anyone will remember
+      // while locked out, and being locked out is exactly when this gets called.
+      const plan = goal_id ? getPlanCouncil(db(), goal_id) : getUnfinishedPlanCouncil(db());
+      if (plan) {
+        if (plan.status === "aborted") {
+          return ok({ ok: true, ...planCouncilBrief(plan), note: "already abandoned" });
+        }
+        transact(db(), () =>
+          setPlanStatus(db(), plan.goal_id, "aborted", `abandoned by ${agent}: ${reason}`),
+        );
+        log(`abandon: ${plan.goal_id} (plan council) by=${agent}`);
+        return ok({
+          ok: true,
+          ...planCouncilBrief(getPlanCouncil(db(), plan.goal_id)),
+          note:
+            "Abandoned. The peer is released on its next call, the trail stays readable, " +
+            "and you can now open a new council of either mode.",
+        });
+      }
+
       const council = goal_id ? getCouncil(db(), goal_id) : unfinishedCouncilForAgent(agent);
       if (!council) {
         return fail(goal_id ? `no council with goal_id ${goal_id}` : "you have no unfinished council");
@@ -776,7 +838,19 @@ server.registerTool(
   async ({ agent, goal_id }) => {
     try {
       const council = goal_id ? getCouncil(db(), goal_id) : getActiveCouncilForAgent(db(), agent);
-      if (!council) return fail(goal_id ? `no council with goal_id ${goal_id}` : "no active council");
+      if (!council) {
+        // "No active council" is a misleading answer to give an agent that is mid-plan
+        // council. Point at the mode that actually holds its work.
+        const plan = goal_id ? getPlanCouncil(db(), goal_id) : getUnfinishedPlanCouncil(db());
+        if (plan) {
+          return ok({
+            ok: true,
+            ...planCouncilBrief(plan),
+            note: "This is a plan council, not a debate council. Call plan_council_open for it.",
+          });
+        }
+        return fail(goal_id ? `no council with goal_id ${goal_id}` : "no active council");
+      }
 
       const all = getAllEntries(db(), council.goal_id);
       return ok({
@@ -886,6 +960,23 @@ server.registerTool(
     });
   },
 );
+
+// ---------------------------------------------------------------------------
+// The plan council — a separate mode over the same database, so the one-at-a-time guard
+// can see across both. Everything shared is passed in rather than imported.
+// ---------------------------------------------------------------------------
+
+registerPlanTools(server, {
+  db,
+  ok,
+  fail,
+  sleep,
+  log,
+  pollBudgetMs: POLL_BUDGET_MS,
+  pollIntervalMs: POLL_INTERVAL_MS,
+  totalWaitMs: TOTAL_WAIT_MS,
+  unfinishedDebateCouncil: unfinishedCouncilForAgent,
+});
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

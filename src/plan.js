@@ -1,0 +1,595 @@
+// The plan council — the tools for the critique/resolve loop.
+//
+// Registered on the same server as the debate mode, sharing its database so the
+// one-at-a-time guard can see across both. Everything shared with server.js is passed in
+// rather than imported, so nothing over there has to be rearranged to make room.
+
+import { z } from "zod";
+
+import {
+  transact,
+  getPlanCouncil,
+  getUnfinishedPlanCouncil,
+  getLatestPlanCouncil,
+  createPlanCouncil,
+  getPlanSteps,
+  appendPlanStep,
+  setPlanStatus,
+  setPlanRound,
+  getCouncil,
+} from "./db.js";
+import {
+  AUTHOR,
+  CRITIC,
+  CRITIC_READINESS,
+  AUTHOR_READINESS,
+  LIMITS_PLAN,
+  planState,
+  validateCritique,
+  validateResolve,
+  validateDecision,
+  CRITIQUE_INSTRUCTION,
+  RESOLVE_INSTRUCTION,
+  DECIDED_INSTRUCTION,
+} from "./plan-rules.js";
+import {
+  councilDir,
+  makeGoalId,
+  writePlanBrief,
+  writePlanStep,
+  writePlanTrail,
+  planSummaryBlock,
+} from "./render.js";
+
+const AGENTS = [AUTHOR, CRITIC];
+
+// Anything the kill switch or a stall can set. An await must release on all of them.
+const TERMINAL = ["ready", "capped", "error", "aborted"];
+
+export function registerPlanTools(server, deps) {
+  const { db, ok, fail, sleep, log, pollBudgetMs, pollIntervalMs, totalWaitMs, unfinishedDebateCouncil } =
+    deps;
+
+  const steps = (goalId) => getPlanSteps(db(), goalId);
+  const stateOf = (council) => planState(steps(council.goal_id), council.max_rounds);
+
+  const instructionFor = (state, all) => {
+    if (state.phase === "critique") return CRITIQUE_INSTRUCTION;
+    if (state.phase !== "resolve") return null;
+    return all.at(-1)?.kind === "decision" ? DECIDED_INSTRUCTION : RESOLVE_INSTRUCTION;
+  };
+
+  /**
+   * Write back the status and round the steps imply.
+   *
+   * The status column is a cache of what planState computes; every mutating tool refreshes
+   * it inside the same transaction that appended the step, so a peer polling from the other
+   * process sees the two agree.
+   */
+  function sync(council) {
+    const all = steps(council.goal_id);
+    const state = planState(all, council.max_rounds);
+    const wanted = state.status ?? "active";
+    if (council.status !== wanted) {
+      setPlanStatus(db(), council.goal_id, wanted, state.reason ?? null);
+    }
+    if (council.round !== state.round) setPlanRound(db(), council.goal_id, state.round);
+    return state;
+  }
+
+  function view(council, agent) {
+    const all = steps(council.goal_id);
+    const state = planState(all, council.max_rounds);
+    const critique = [...all].reverse().find((s) => s.kind === "critique") ?? null;
+    const resolution = [...all].reverse().find((s) => s.kind === "resolve") ?? null;
+
+    return {
+      goal_id: council.goal_id,
+      plan_path: council.plan_path,
+      project_path: council.project_path,
+      round: state.round,
+      max_rounds: council.max_rounds,
+      final_round: state.round >= council.max_rounds,
+      status: council.status,
+      stop_reason: council.stop_reason ?? null,
+      record_path: councilDir(council.goal_id),
+      author: AUTHOR,
+      critic: CRITIC,
+      your_role: agent === AUTHOR ? "author" : "critic",
+      phase: state.phase,
+      next_actor: state.actor ?? null,
+      critiques_so_far: all.filter((s) => s.kind === "critique").length,
+      latest_critique: critique
+        ? {
+            round: critique.round,
+            critique: critique.critique,
+            blockers: critique.blockers,
+            highs: critique.highs,
+            mediums: critique.mediums,
+            lows: critique.lows,
+            readiness: critique.critic_readiness,
+          }
+        : null,
+      latest_resolution: resolution
+        ? {
+            round: resolution.round,
+            applied: resolution.applied,
+            rejected: resolution.rejected,
+            additional: resolution.additional,
+            needs_user_decision: resolution.needs_user,
+            readiness: resolution.author_readiness,
+          }
+        : null,
+    };
+  }
+
+  /** What to tell an agent whose turn it is not, or whose council has stopped. */
+  function nextStep(council, agent, state) {
+    if (state.phase === "final") {
+      return council.status === "ready"
+        ? "The critic reports the plan is implementation-ready. Call plan_council_close and " +
+            "tell the user the plan is ready to implement."
+        : "The council has stopped. Call plan_council_close and show the user why.";
+    }
+    if (state.phase === "user") {
+      return (
+        "Stop and hand back to the user: the decision in latest_resolution.needs_user_decision " +
+        "is theirs to make, not yours to guess. When they answer, call plan_council_resume."
+      );
+    }
+    if (state.actor === agent) {
+      return state.phase === "critique"
+        ? `Critique the plan for round ${state.round} with plan_council_critique.`
+        : `Resolve round ${state.round}'s critique with plan_council_resolve.`;
+    }
+    return `Waiting on ${state.actor} to ${state.phase}. Call plan_council_await.`;
+  }
+
+  const reply = (council, agent, extra = {}) => {
+    const all = steps(council.goal_id);
+    const state = planState(all, council.max_rounds);
+    return ok({
+      ok: true,
+      ...view(council, agent),
+      next_step: nextStep(council, agent, state),
+      ...(state.actor === agent ? { instruction: instructionFor(state, all) } : {}),
+      ...extra,
+    });
+  };
+
+  // -------------------------------------------------------------------------
+  // plan_council_open
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "plan_council_open",
+    {
+      title: "Open or join a plan council",
+      description:
+        "Start the critique/resolve loop on an implementation plan, or join the one the " +
+        "peer already started. Call this first. codex critiques with its critique-plan " +
+        "skill; claude applies with plan-critique-resolver, editing the plan file in place.",
+      inputSchema: {
+        agent: z.enum(AGENTS).describe("Which model you are."),
+        plan_path: z
+          .string()
+          .optional()
+          .describe("Absolute path of the plan file. Required when starting."),
+        project_path: z
+          .string()
+          .optional()
+          .describe(
+            "Absolute path of the project. Required when starting. Pass it explicitly — " +
+              "the server's working directory does not identify the project.",
+          ),
+        git_branch: z.string().optional(),
+        max_rounds: z.number().int().min(1).max(10).optional().describe("Default 4."),
+      },
+    },
+    async ({ agent, plan_path, project_path, git_branch, max_rounds = 4 }) => {
+      try {
+        // One council at a time, across both modes. A debate council mid-flight means a
+        // peer is blocked waiting on this agent; starting a plan council here would strand
+        // it — the deadlock class this project already fixed once.
+        const debate = unfinishedDebateCouncil(agent);
+        if (debate) {
+          return fail(
+            `you have an unfinished council: ${debate.goal_id} (${debate.status}). ` +
+              "Finish it, or release it with council_abandon, before starting a plan council.",
+            { blocking_goal_id: debate.goal_id, blocking_mode: "council" },
+          );
+        }
+
+        const council = transact(db(), () => {
+          const existing = getUnfinishedPlanCouncil(db());
+          if (existing) return existing;
+
+          if (!plan_path) throw new Error("plan_path is required when starting a plan council");
+          if (!project_path) {
+            throw new Error("project_path is required when starting a plan council");
+          }
+
+          const base = (plan_path.split("/").pop() ?? "plan").replace(/\.[^.]+$/, "");
+          const id = makeGoalId(
+            `plan ${base}`,
+            (candidate) =>
+              getPlanCouncil(db(), candidate) !== null || getCouncil(db(), candidate) !== null,
+          );
+          return createPlanCouncil(db(), {
+            goalId: id,
+            planPath: plan_path,
+            projectPath: project_path,
+            gitBranch: git_branch,
+            maxRounds: max_rounds,
+          });
+        });
+
+        writePlanBrief(council);
+        log(`plan open: ${council.goal_id} agent=${agent} round=${council.round}`);
+
+        // Asked for one plan, joined a council about another. Silently handing back the
+        // running council would have the model critiquing a file nobody mentioned.
+        const wrongPlan = plan_path && plan_path !== council.plan_path;
+        return reply(council, agent, {
+          ...(wrongPlan
+            ? {
+                warning:
+                  `you asked for ${plan_path}, but the running plan council is about ` +
+                  `${council.plan_path}. Finish or abandon that one before reviewing another ` +
+                  "plan — tell the user rather than critiquing the wrong file.",
+              }
+            : {}),
+        });
+      } catch (error) {
+        return fail(error.message);
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // plan_council_critique
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "plan_council_critique",
+    {
+      title: "Submit a critique of the plan",
+      description:
+        "Record the output of your critique-plan skill for this round. Only the critic may " +
+        "call this. The counts are what let the server stop the loop: from round 3 only " +
+        "Blocker and High findings hold the plan back.",
+      inputSchema: {
+        goal_id: z.string(),
+        agent: z.enum(AGENTS),
+        critique: z
+          .string()
+          .max(LIMITS_PLAN.critique)
+          .describe("The Needs Fix findings in full, as the skill wrote them. Markdown."),
+        blockers: z.number().int().min(0).describe("How many Blocker findings."),
+        highs: z.number().int().min(0).describe("How many High findings."),
+        mediums: z.number().int().min(0).describe("How many Medium findings."),
+        lows: z.number().int().min(0).describe("How many Low findings."),
+        readiness: z
+          .enum(CRITIC_READINESS)
+          .describe("The skill's Readiness line. Ready ends the council."),
+      },
+    },
+    async ({ goal_id, agent, ...fields }) => {
+      try {
+        const result = transact(db(), () => {
+          const council = requireOpen(goal_id);
+          const state = stateOf(council);
+
+          if (agent !== CRITIC) {
+            throw new Error(`${CRITIC} critiques this council; you are the author`);
+          }
+          if (state.phase !== "critique") {
+            throw new Error(
+              state.phase === "resolve"
+                ? `nothing to critique: ${AUTHOR} still owes the resolution for round ${state.round}`
+                : `the council has stopped — ${state.reason}`,
+            );
+          }
+
+          const seq = appendPlanStep(
+            db(),
+            goal_id,
+            validateCritique(fields, council, state.round),
+          );
+          sync(council);
+          return { seq, round: state.round };
+        });
+
+        const council = getPlanCouncil(db(), goal_id);
+        writePlanStep(goal_id, steps(goal_id).find((s) => s.seq === result.seq));
+        log(`plan critique: ${goal_id} round=${result.round} status=${council.status}`);
+
+        return reply(council, agent);
+      } catch (error) {
+        return fail(error.message, { field: error.field ?? null });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // plan_council_resolve
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "plan_council_resolve",
+    {
+      title: "Record how you resolved the critique",
+      description:
+        "Record the output of your plan-critique-resolver skill. Only the author may call " +
+        "this. The skill edits the plan file itself — this records what it did. An entry " +
+        "in needs_user_decision stops the council and hands that decision to the user.",
+      inputSchema: {
+        goal_id: z.string(),
+        agent: z.enum(AGENTS),
+        applied: z
+          .string()
+          .max(LIMITS_PLAN.block)
+          .describe("Plan Fixes Applied — what changed in the plan file, and why."),
+        rejected: z
+          .string()
+          .max(LIMITS_PLAN.block)
+          .optional()
+          .describe("Critiques Rejected, with the reason for each. 'None.' if there were none."),
+        additional: z
+          .string()
+          .max(LIMITS_PLAN.block)
+          .optional()
+          .describe("Additional Issues Integrated. 'None.' if there were none."),
+        needs_user_decision: z
+          .string()
+          .max(LIMITS_PLAN.block)
+          .optional()
+          .describe(
+            "Needs User Decision — unresolved choices that are the user's. Anything here " +
+              "stops the council. 'None.' if there were none.",
+          ),
+        readiness: z
+          .enum(AUTHOR_READINESS)
+          .describe("The skill's Implementation-Ready Decision."),
+      },
+    },
+    async ({ goal_id, agent, ...fields }) => {
+      try {
+        const result = transact(db(), () => {
+          const council = requireOpen(goal_id);
+          const state = stateOf(council);
+
+          if (agent !== AUTHOR) {
+            throw new Error(`${AUTHOR} resolves this council; you are the critic`);
+          }
+          if (state.phase !== "resolve") {
+            throw new Error(
+              state.phase === "critique"
+                ? `nothing to resolve: waiting on ${CRITIC} to critique round ${state.round}`
+                : `the council has stopped — ${state.reason}`,
+            );
+          }
+
+          const seq = appendPlanStep(db(), goal_id, validateResolve(fields, state.round));
+          sync(council);
+          return { seq, round: state.round };
+        });
+
+        const council = getPlanCouncil(db(), goal_id);
+        writePlanStep(goal_id, steps(goal_id).find((s) => s.seq === result.seq));
+        log(`plan resolve: ${goal_id} round=${result.round} status=${council.status}`);
+
+        return reply(council, agent);
+      } catch (error) {
+        return fail(error.message, { field: error.field ?? null });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // plan_council_await
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "plan_council_await",
+    {
+      title: "Wait for your turn",
+      description:
+        "Block until it is your move, or until the council stops. If the reply has " +
+        "retry:true, call it again. Returns the peer's latest critique or resolution.",
+      inputSchema: {
+        goal_id: z.string(),
+        agent: z.enum(AGENTS),
+      },
+    },
+    async ({ goal_id, agent }) => {
+      try {
+        const opened = getPlanCouncil(db(), goal_id);
+        if (!opened) return fail(`no plan council with goal_id ${goal_id}`);
+
+        const deadline = Date.now() + pollBudgetMs;
+        while (Date.now() < deadline) {
+          const council = getPlanCouncil(db(), goal_id);
+
+          if (TERMINAL.includes(council.status)) {
+            return reply(council, agent, {
+              arrived: council.status === "ready" || council.status === "capped",
+              retry: false,
+              note: `the council is ${council.status}; stop waiting`,
+            });
+          }
+
+          const all = steps(goal_id);
+          const state = planState(all, council.max_rounds);
+
+          // Parked on the user. Release immediately — and do not let the stall timer run,
+          // or the council dies as `error` while the user is thinking about the very
+          // question it asked them.
+          if (state.phase === "user") {
+            return reply(council, agent, {
+              arrived: false,
+              retry: false,
+              note: "waiting on the user to decide, not on the peer. Show them the decision.",
+            });
+          }
+
+          if (state.actor === agent) {
+            return reply(council, agent, { arrived: true, retry: false });
+          }
+
+          // The peer has stopped answering. Unlike the debate mode's drafting phase there
+          // is no artifact to rescue: every fix already applied lives in the plan file,
+          // which is untouched by this.
+          const since = all.length
+            ? new Date(all.at(-1).created_at).getTime()
+            : new Date(council.started_at).getTime();
+          if (Date.now() - since > totalWaitMs) {
+            transact(db(), () =>
+              setPlanStatus(
+                db(),
+                goal_id,
+                "error",
+                `${state.actor} did not ${state.phase} round ${state.round} within 5 minutes`,
+              ),
+            );
+            const stalled = getPlanCouncil(db(), goal_id);
+            return reply(stalled, agent, {
+              arrived: false,
+              retry: false,
+              note:
+                `${state.actor} stopped responding. The plan file keeps every fix applied ` +
+                "so far; the trail is still readable.",
+            });
+          }
+
+          await sleep(pollIntervalMs);
+        }
+
+        const council = getPlanCouncil(db(), goal_id);
+        const state = stateOf(council);
+        return reply(council, agent, {
+          arrived: false,
+          retry: true,
+          waited_seconds: Math.round(pollBudgetMs / 1000),
+          note: `waiting on ${state.actor} to ${state.phase}. Call plan_council_await again.`,
+        });
+      } catch (error) {
+        return fail(error.message);
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // plan_council_resume
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "plan_council_resume",
+    {
+      title: "Give the council the user's decision",
+      description:
+        "Record what the user decided about the point the resolver could not settle, and " +
+        "hand the loop back to the author. The round does not advance — no new critique " +
+        "was raised. Either side may call this; the user is in one window.",
+      inputSchema: {
+        agent: z.enum(AGENTS),
+        decision: z
+          .string()
+          .max(LIMITS_PLAN.decision)
+          .describe("What the user decided, in their terms. Recorded in the trail."),
+        goal_id: z.string().optional().describe("Defaults to the parked council."),
+      },
+    },
+    async ({ agent, decision, goal_id }) => {
+      try {
+        const result = transact(db(), () => {
+          const council = goal_id
+            ? getPlanCouncil(db(), goal_id)
+            : getUnfinishedPlanCouncil(db());
+          if (!council) {
+            throw new Error(
+              goal_id ? `no plan council with goal_id ${goal_id}` : "no plan council to resume",
+            );
+          }
+          if (council.status !== "needs_user") {
+            throw new Error(
+              `this council is ${council.status}, not waiting on a decision. ` +
+                "Nothing to resume.",
+            );
+          }
+
+          const state = stateOf(council);
+          const seq = appendPlanStep(db(), council.goal_id, {
+            kind: "decision",
+            actor: "user",
+            round: state.round,
+            decision: validateDecision(decision),
+          });
+          sync(council);
+          return { goalId: council.goal_id, seq };
+        });
+
+        const council = getPlanCouncil(db(), result.goalId);
+        writePlanStep(result.goalId, steps(result.goalId).find((s) => s.seq === result.seq));
+        log(`plan resume: ${result.goalId} relayed by=${agent}`);
+
+        return reply(council, agent);
+      } catch (error) {
+        return fail(error.message, { field: error.field ?? null });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // plan_council_close
+  // -------------------------------------------------------------------------
+
+  server.registerTool(
+    "plan_council_close",
+    {
+      title: "Render the trail",
+      description:
+        "Write trail.md and return the summary to show the user. Safe to call twice, and " +
+        "safe on a council still running — it renders what exists.",
+      inputSchema: {
+        agent: z.enum(AGENTS),
+        goal_id: z.string().optional(),
+      },
+    },
+    async ({ agent, goal_id }) => {
+      try {
+        const council = goal_id
+          ? getPlanCouncil(db(), goal_id)
+          : (getUnfinishedPlanCouncil(db()) ?? getLatestPlanCouncil(db()));
+        if (!council) {
+          return fail(goal_id ? `no plan council with goal_id ${goal_id}` : "no plan council");
+        }
+
+        const all = steps(council.goal_id);
+        const path = writePlanTrail(council, all);
+        log(`plan close: ${council.goal_id} status=${council.status} steps=${all.length}`);
+
+        return reply(council, agent, {
+          trail_path: path,
+          summary: planSummaryBlock(council, all),
+        });
+      } catch (error) {
+        return fail(error.message);
+      }
+    },
+  );
+
+  function requireOpen(goalId) {
+    const council = getPlanCouncil(db(), goalId);
+    if (!council) throw new Error(`no plan council with goal_id ${goalId}`);
+    if (council.status === "aborted") throw new Error("this council was abandoned");
+    if (council.status === "error") throw new Error(`this council failed — ${council.stop_reason}`);
+    if (council.status === "needs_user") {
+      throw new Error(
+        "this council is waiting on a decision from the user. Relay it with " +
+          "plan_council_resume before going on.",
+      );
+    }
+    return council;
+  }
+}

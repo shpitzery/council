@@ -75,8 +75,52 @@ const SCHEMA = [
      PRIMARY KEY (goal_id, revision)
    )`,
 
+  // The plan council. A separate mode with its own table: it automates the
+  // critique-plan / plan-critique-resolver loop, where entries are free text rather than
+  // the debate mode's one-sentence position and capped bullet lists. Same database, so
+  // the one-at-a-time guard can see across both modes.
+  `CREATE TABLE IF NOT EXISTS plan_councils (
+     goal_id      TEXT PRIMARY KEY,
+     plan_path    TEXT NOT NULL,
+     project_path TEXT NOT NULL,
+     git_branch   TEXT,
+     round        INTEGER NOT NULL DEFAULT 1,
+     max_rounds   INTEGER NOT NULL DEFAULT 4,
+     status       TEXT NOT NULL DEFAULT 'active',
+     stop_reason  TEXT,
+     started_at   TEXT NOT NULL,
+     updated_at   TEXT NOT NULL
+   )`,
+
+  // Append-only. The phase is derived from the last row, the way draftState derives the
+  // drafting phase from `drafts`. Append-only is what lets the author resolve twice in one
+  // round — once on the critique, again on the user's decision — without either overwriting
+  // the other.
+  `CREATE TABLE IF NOT EXISTS plan_steps (
+     goal_id          TEXT NOT NULL REFERENCES plan_councils(goal_id) ON DELETE CASCADE,
+     seq              INTEGER NOT NULL,
+     round            INTEGER NOT NULL,
+     kind             TEXT NOT NULL,
+     actor            TEXT NOT NULL,
+     critique         TEXT,
+     blockers         INTEGER,
+     highs            INTEGER,
+     mediums          INTEGER,
+     lows             INTEGER,
+     critic_readiness TEXT,
+     applied          TEXT,
+     rejected         TEXT,
+     additional       TEXT,
+     needs_user       TEXT,
+     author_readiness TEXT,
+     decision         TEXT,
+     created_at       TEXT NOT NULL,
+     PRIMARY KEY (goal_id, seq)
+   )`,
+
   "CREATE INDEX IF NOT EXISTS entries_by_round ON entries (goal_id, round)",
   "CREATE INDEX IF NOT EXISTS councils_by_status ON councils (status)",
+  "CREATE INDEX IF NOT EXISTS plan_councils_by_status ON plan_councils (status)",
 ];
 
 export function openDatabase(path) {
@@ -304,6 +348,112 @@ export function reviewDraft(db, goalId, revision, reviewer, verdict, revisions) 
 
 export function advanceRound(db, goalId, round) {
   db.prepare("UPDATE councils SET round = ?, updated_at = ? WHERE goal_id = ?").run(
+    round,
+    now(),
+    goalId,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The plan council
+// ---------------------------------------------------------------------------
+
+export const PLAN_STATUSES = ["active", "ready", "capped", "needs_user", "error", "aborted"];
+
+// A council parked on a user decision is not finished — it is waiting for a human. It
+// still blocks new councils, because the user has to answer it or abandon it.
+export const PLAN_UNFINISHED = ["active", "needs_user"];
+
+export function getPlanCouncil(db, goalId) {
+  return db.prepare("SELECT * FROM plan_councils WHERE goal_id = ?").get(goalId) ?? null;
+}
+
+/**
+ * The plan council that still owes work, if any.
+ *
+ * Both agents are in every plan council by construction — the roles are fixed — so this
+ * takes no agent argument. The one-at-a-time guard is a single question either side can ask.
+ */
+export function getUnfinishedPlanCouncil(db) {
+  const marks = PLAN_UNFINISHED.map(() => "?").join(", ");
+  return (
+    db
+      .prepare(
+        `SELECT * FROM plan_councils WHERE status IN (${marks})
+         ORDER BY started_at DESC LIMIT 1`,
+      )
+      .get(...PLAN_UNFINISHED) ?? null
+  );
+}
+
+/** The most recent plan council, finished or not. What `close` falls back to. */
+export function getLatestPlanCouncil(db) {
+  return (
+    db.prepare("SELECT * FROM plan_councils ORDER BY started_at DESC LIMIT 1").get() ?? null
+  );
+}
+
+export function createPlanCouncil(db, { goalId, planPath, projectPath, gitBranch, maxRounds }) {
+  const ts = now();
+  db.prepare(
+    `INSERT INTO plan_councils
+       (goal_id, plan_path, project_path, git_branch, round, max_rounds, status, started_at, updated_at)
+     VALUES (?, ?, ?, ?, 1, ?, 'active', ?, ?)`,
+  ).run(goalId, planPath, projectPath, gitBranch ?? null, maxRounds, ts, ts);
+  return getPlanCouncil(db, goalId);
+}
+
+export function getPlanSteps(db, goalId) {
+  return db.prepare("SELECT * FROM plan_steps WHERE goal_id = ? ORDER BY seq").all(goalId);
+}
+
+/**
+ * Append a step. The sequence number is derived inside the same transaction as the read,
+ * so two processes cannot mint the same seq — the primary key would reject the second.
+ */
+export function appendPlanStep(db, goalId, step) {
+  const last = db
+    .prepare("SELECT MAX(seq) AS seq FROM plan_steps WHERE goal_id = ?")
+    .get(goalId);
+  const seq = (last?.seq ?? 0) + 1;
+  db.prepare(
+    `INSERT INTO plan_steps
+       (goal_id, seq, round, kind, actor, critique, blockers, highs, mediums, lows,
+        critic_readiness, applied, rejected, additional, needs_user, author_readiness,
+        decision, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    goalId,
+    seq,
+    step.round,
+    step.kind,
+    step.actor,
+    step.critique ?? null,
+    step.blockers ?? null,
+    step.highs ?? null,
+    step.mediums ?? null,
+    step.lows ?? null,
+    step.critic_readiness ?? null,
+    step.applied ?? null,
+    step.rejected ?? null,
+    step.additional ?? null,
+    step.needs_user ?? null,
+    step.author_readiness ?? null,
+    step.decision ?? null,
+    now(),
+  );
+  return seq;
+}
+
+export function setPlanStatus(db, goalId, status, stopReason = null) {
+  if (!PLAN_STATUSES.includes(status)) throw new Error(`unknown plan status: ${status}`);
+  db.prepare(
+    "UPDATE plan_councils SET status = ?, stop_reason = ?, updated_at = ? WHERE goal_id = ?",
+  ).run(status, stopReason, now(), goalId);
+}
+
+export function setPlanRound(db, goalId, round) {
+  db.prepare("UPDATE plan_councils SET round = ?, updated_at = ? WHERE goal_id = ?").run(
     round,
     now(),
     goalId,

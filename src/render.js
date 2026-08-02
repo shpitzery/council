@@ -213,6 +213,153 @@ export function writeVerdict(council, entries, verdict) {
   return join(dir, "verdict.md");
 }
 
+// ---------------------------------------------------------------------------
+// The plan council
+//
+// The artifact here is the plan file itself, which the resolver edits in place. These
+// files are the trail beside it: what was critiqued, what was applied, and what was
+// rejected and why — the part of the manual loop that today survives only in scrollback.
+// ---------------------------------------------------------------------------
+
+export function writePlanBrief(council) {
+  const dir = ensureCouncilDir(council.goal_id);
+  const lines = [
+    `# Plan council — ${council.goal_id}`,
+    "",
+    "## Plan under review",
+    "",
+    council.plan_path,
+    "",
+    "## Context",
+    "",
+    `- Project: ${council.project_path}`,
+    council.git_branch ? `- Branch: ${council.git_branch}` : null,
+    `- Started: ${council.started_at}`,
+    `- Maximum rounds: ${council.max_rounds}`,
+    "- codex critiques, claude applies. The plan file is edited in place.",
+    "",
+    "## How this ends",
+    "",
+    "It stops when codex reports the plan implementation-ready, when a decision turns out",
+    `to be the user's to make, or after ${council.max_rounds} rounds.`,
+    "",
+    "From round 3 only Blocker and High findings hold the plan back. A thorough critic",
+    "finds new Medium issues forever, because every revision creates new surface.",
+    "",
+  ].filter((l) => l !== null);
+  writeFileSync(join(dir, "brief.md"), lines.join("\n"));
+}
+
+const planStepLines = (step) => {
+  if (step.kind === "critique") {
+    return [
+      `### Round ${step.round} — critique by ${step.actor}`,
+      "",
+      `Findings: ${step.blockers} Blocker, ${step.highs} High, ${step.mediums} Medium, ` +
+        `${step.lows} Low. Readiness: **${step.critic_readiness}**.`,
+      "",
+      step.critique,
+      "",
+    ];
+  }
+  if (step.kind === "decision") {
+    return [`### Round ${step.round} — the user decided`, "", step.decision, ""];
+  }
+  return [
+    `### Round ${step.round} — resolution by ${step.actor}`,
+    "",
+    `Implementation-ready: **${step.author_readiness}**.`,
+    "",
+    "**Plan fixes applied**",
+    "",
+    step.applied,
+    "",
+    "**Critiques rejected**",
+    "",
+    step.rejected ?? "None.",
+    "",
+    "**Additional issues integrated**",
+    "",
+    step.additional ?? "None.",
+    "",
+    "**Needs user decision**",
+    "",
+    step.needs_user ?? "None.",
+    "",
+  ];
+};
+
+export function writePlanStep(goalId, step) {
+  ensureCouncilDir(goalId);
+  const name = `r${step.round}-${step.kind}-${step.seq}.md`;
+  writeFileSync(join(councilDir(goalId), name), planStepLines(step).join("\n") + "\n");
+}
+
+export function planSummaryBlock(council, steps) {
+  const critiques = steps.filter((s) => s.kind === "critique");
+  const last = critiques.length ? critiques[critiques.length - 1] : null;
+  const resolutions = steps.filter((s) => s.kind === "resolve");
+  const rejected = resolutions.filter((s) => s.rejected).length;
+  const pending = steps.filter((s) => s.kind === "resolve" && s.needs_user).at(-1);
+
+  const lines = [
+    `PLAN COUNCIL ${council.goal_id} — ${council.status} after ` +
+      `${critiques.length} critique${critiques.length === 1 ? "" : "s"}`,
+    "",
+    `Plan:             ${council.plan_path}`,
+    `Stopped because:  ${council.stop_reason ?? "not recorded"}`,
+    "",
+    last
+      ? `Last critique:    ${last.blockers} Blocker, ${last.highs} High, ` +
+        `${last.mediums} Medium, ${last.lows} Low — ${last.critic_readiness}`
+      : "Last critique:    none",
+    `Rounds with rejected critiques: ${rejected}`,
+    "",
+  ];
+
+  if (council.status === "needs_user" && pending) {
+    lines.push("Waiting on you to decide:", "", pending.needs_user, "");
+    lines.push(
+      "Answer it with plan_council_resume, or abandon the council with council_abandon.",
+      "",
+    );
+  }
+
+  if (council.status === "capped") {
+    lines.push(
+      "The cap stopped this, not the critic. The plan holds every fix applied so far, and",
+      "the last critique above says what it still objects to. Read it before implementing.",
+      "",
+    );
+  }
+
+  lines.push(`Full trail:       ${councilDir(council.goal_id)}`);
+  return lines.join("\n");
+}
+
+export function writePlanTrail(council, steps) {
+  const dir = ensureCouncilDir(council.goal_id);
+  const lines = [
+    `# Plan council trail — ${council.goal_id}`,
+    "",
+    "```",
+    planSummaryBlock(council, steps),
+    "```",
+    "",
+    "## Plan under review",
+    "",
+    `${council.plan_path} — edited in place by the resolver, round by round.`,
+    "",
+    "## Record",
+    "",
+  ];
+  for (const step of steps) lines.push(...planStepLines(step));
+
+  const path = join(dir, "trail.md");
+  writeFileSync(path, lines.join("\n"));
+  return path;
+}
+
 /** `YYYY-MM-DD-<slug>` from the question, with a suffix if that id is taken. */
 export function makeGoalId(question, exists) {
   const date = new Date().toISOString().slice(0, 10);
