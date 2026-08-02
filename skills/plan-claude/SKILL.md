@@ -109,6 +109,7 @@ wrong, Codex never joined, or the user changed their mind. `council_close` and
 `plan_council_close` render records; they release nothing, so calling them on a blocking
 council leaves you exactly as blocked as before.
 
-**No subagents for the protocol itself.** Do not hand the council loop to the Agent tool.
-`plan-critique-resolver` calling its own `plan-readiness-verifier` is that skill's business
-and stays exactly as it is.
+**No subagents, anywhere in this.** Do not hand the council loop to the Agent tool, and do
+not let the resolving step spawn one either — `plan-critique-resolver` now does its
+code-grounded verification itself, for the same reason: a subagent starts cold, re-derives
+context you already hold, and returns findings you have to re-check.
