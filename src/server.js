@@ -434,9 +434,53 @@ server.registerTool(
       // The rounds are over; this is the drafting phase. Wait until the answer is final
       // or it is this agent's move.
       if (council.status !== "active") {
+        // How long the phase has been stalled: since the last draft, or since the review
+        // that asked for another one.
+        const drafts = getDrafts(db(), goal_id);
+        const last = drafts.length ? drafts[drafts.length - 1] : null;
+        const stalledSince = last
+          ? new Date(last.reviewed_at ?? last.drafted_at).getTime()
+          : new Date(council.updated_at).getTime();
+
         const deadline = Date.now() + POLL_BUDGET_MS;
         while (Date.now() < deadline) {
           const view = draftView(goal_id);
+
+          // The peer has abandoned the drafting phase. Do not discard the work: if a
+          // draft exists it becomes the answer, marked as never reviewed. Erroring the
+          // council here would throw away a perfectly good draft over a missing reply.
+          if (Date.now() - stalledSince > TOTAL_WAIT_MS && view.phase !== "final") {
+            if (last) {
+              transact(db(), () =>
+                db()
+                  .prepare(
+                    `UPDATE drafts SET verdict = 'UNREVIEWED', reviewer = NULL,
+                     reviewed_at = ? WHERE goal_id = ? AND revision = ? AND verdict IS NULL`,
+                  )
+                  .run(new Date().toISOString(), goal_id, last.revision),
+              );
+              return ok({
+                ok: true,
+                arrived: true,
+                retry: false,
+                ...councilView(council),
+                ...draftView(goal_id),
+                note:
+                  `${view.next_actor} did not respond within 5 minutes. Revision ` +
+                  `${last.revision} stands as the answer, unreviewed. Call council_close.`,
+              });
+            }
+            transact(db(), () =>
+              setStatus(db(), goal_id, "error", `${view.next_actor} never drafted an answer`),
+            );
+            return ok({
+              ok: true,
+              arrived: false,
+              retry: false,
+              ...councilView(getCouncil(db(), goal_id)),
+              note: `${view.next_actor} never drafted. The round record is still readable.`,
+            });
+          }
 
           if (view.phase === "final") {
             return ok({
@@ -666,6 +710,51 @@ server.registerTool(
       });
     } catch (error) {
       return fail(error.message, { field: error.field ?? null });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// council_abandon — the kill switch
+// ---------------------------------------------------------------------------
+
+server.registerTool(
+  "council_abandon",
+  {
+    title: "Abandon a council",
+    description:
+      "Give up on a council that cannot finish — the peer never joined, the question was " +
+      "wrong, or the user changed their mind. The record is kept and stays readable. Use " +
+      "this before starting a different council, since an unfinished one blocks new ones.",
+    inputSchema: {
+      agent: z.enum(AGENTS),
+      reason: z.string().max(500).describe("Why. This is recorded."),
+      goal_id: z.string().optional().describe("Defaults to your unfinished council."),
+    },
+  },
+  async ({ agent, reason, goal_id }) => {
+    try {
+      const council = goal_id ? getCouncil(db(), goal_id) : unfinishedCouncilForAgent(agent);
+      if (!council) {
+        return fail(goal_id ? `no council with goal_id ${goal_id}` : "you have no unfinished council");
+      }
+      if (council.status === "aborted") {
+        return ok({ ok: true, ...councilView(council), note: "already abandoned" });
+      }
+
+      transact(db(), () => setStatus(db(), council.goal_id, "aborted", `abandoned by ${agent}: ${reason}`));
+      const after = getCouncil(db(), council.goal_id);
+      log(`abandon: ${council.goal_id} by=${agent}`);
+
+      return ok({
+        ok: true,
+        ...councilView(after),
+        note:
+          "Abandoned. The peer is released on its next call, the record stays readable, " +
+          "and you can now open a new council.",
+      });
+    } catch (error) {
+      return fail(error.message);
     }
   },
 );

@@ -230,6 +230,15 @@ export function draftState(drafts, drafter, reviewer) {
     };
   }
 
+  // The reviewer stopped responding. The draft stands rather than being thrown away.
+  if (latest.verdict === "UNREVIEWED") {
+    return {
+      phase: "final",
+      revision: latest.revision,
+      reason: `revision ${latest.revision} stands unreviewed — the peer stopped responding`,
+    };
+  }
+
   // REVISE. Another draft is owed unless the budget is spent.
   if (latest.revision >= MAX_DRAFTS) {
     return {

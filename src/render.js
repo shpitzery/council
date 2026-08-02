@@ -161,7 +161,9 @@ export function writeAnswer(council, drafts) {
       ? `Approved by ${final.reviewer}.`
       : final.verdict === "REVISE"
         ? `**Shipped without approval** — ${final.reviewer} still wanted changes:\n\n> ${unaddressed}`
-        : "Not reviewed — the review budget was spent.",
+        : final.verdict === "UNREVIEWED"
+          ? "**Never reviewed** — the peer stopped responding. One model's answer, not two."
+          : "Not reviewed — the review budget was spent.",
     "",
     `Reached after ${council.round} round${council.round === 1 ? "" : "s"} of debate ` +
       `(${council.status}: ${council.stop_reason ?? "no reason recorded"}).`,

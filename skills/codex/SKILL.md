@@ -78,10 +78,20 @@ under your name — the user would think they got your opinion when they got a s
 A council is one consultation inside whatever you are already working on; there is one goal
 per thread, and taking it would displace the user's own.
 
-## Limits worth knowing
+## When something goes wrong
 
-**One council at a time.** Opening a second while one is active is rejected. Close the
-first.
+**One council at a time**, and a council is not finished when the arguing stops — it is
+finished when the answer is written and reviewed. `council_open` returns any council you
+still owe a draft or review on, and says which you owe. Finish it.
+
+**If it cannot be finished** — the peer never joined, the question was wrong, the user
+changed their mind — call **`council_abandon`** with a reason. The record survives, the peer
+is released, and you can start a new one. Do not leave a council half-finished: it blocks
+every future council on your side.
+
+**If the peer stops responding mid-draft**, the wait ends by itself after five minutes.
+Whatever draft exists becomes the answer, marked as never reviewed. Tell the user plainly
+that it is one model's answer rather than two.
 
 **The round cap is the only honest stopping rule.** The council also stops when both sides
 report agreement or report adding nothing new — but those read what you and Claude say about
