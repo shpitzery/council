@@ -19,8 +19,13 @@ The user runs this skill in both windows.
 
 ## The loop
 
-1. **`plan_council_open`** — `agent: "codex"`, plus `plan_path` and `project_path`. If
-   Claude opened it first you join it.
+1. **`plan_council_open`** — `agent: "codex"`. You join the council Claude opened.
+
+   **You never start one.** The plan is Claude's and only Claude knows which file is under
+   review. If the call says no council is open, that is not a problem to solve: tell the
+   user to run the skill in the Claude window and call it again. Do not go looking for a
+   plan file, and do not open a council on one you found — a critique of a plan nobody asked
+   about is worse than no critique.
 2. **Run your `critique-plan` skill** against the plan file. It does the work: reads the
    plan against the actual code and produces `Needs Fix` findings with severities and a
    `Readiness` line.

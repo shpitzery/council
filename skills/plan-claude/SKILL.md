@@ -52,6 +52,11 @@ it exists: it distinguishes "still working" from "never triggered", which are id
 where you sit. Reporting a working peer as missing is a false statement to the user, and it
 ends the run for no reason. It has already happened once.
 
+**If the wait hands back saying Codex has not joined, the council is still open.** Tell the
+user to start the skill in that window, then call `plan_council_await` again. Do not abandon
+it and do not open a fresh one — the council is fine, the other window just was not running
+yet.
+
 ## Rules the server cannot enforce
 
 **Never guess at a `Needs User Decision`.** If the resolver raises one, put it in

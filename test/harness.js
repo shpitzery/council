@@ -25,7 +25,7 @@ export async function connect(agent, root) {
     env: {
       ...process.env,
       COUNCIL_ROOT: root,
-      COUNCIL_POLL_BUDGET_MS: "2000",
+      COUNCIL_POLL_BUDGET_MS: process.env.COUNCIL_POLL_BUDGET_MS ?? "2000",
       COUNCIL_POLL_INTERVAL_MS: "100",
       COUNCIL_TOTAL_WAIT_MS: process.env.COUNCIL_TOTAL_WAIT_MS ?? "300000",
       COUNCIL_PLAN_JOIN_WAIT_MS: process.env.COUNCIL_PLAN_JOIN_WAIT_MS ?? "300000",

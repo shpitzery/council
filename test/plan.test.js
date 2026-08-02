@@ -49,6 +49,15 @@ describe("a plan council, end to end, with no models", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  // The critic found no open council, listed the plans directory, picked a file itself and
+  // opened a second council on its guess. It guessed right that time.
+  test("the critic cannot start one, even holding a plan path", async () => {
+    const { payload, isError } = await open(codex, "codex");
+    assert.equal(isError, true);
+    assert.match(payload.error, /claude starts a plan council/);
+    assert.match(payload.error, /do not guess at a plan file/);
+  });
+
   test("the author opens it and the critic moves first", async () => {
     const { payload } = await open(claude, "claude");
     assert.equal(payload.ok, true);
@@ -384,29 +393,85 @@ describe("the round cap", () => {
   });
 });
 
-describe("a peer that never joined", () => {
-  let root, claude, goalId;
+// A peer that has not been triggered yet is a not-yet, not a failure. The second real run
+// errored a council the user was about to complete, which then let the critic invent a
+// second one.
+describe("a peer that has not joined yet", () => {
+  let root, claude, codex, goalId;
 
   before(async () => {
     root = makeRoot("plan-nojoin");
     process.env.COUNCIL_PLAN_JOIN_WAIT_MS = "1";
     claude = await connect("claude", root);
+    codex = await connect("codex", root);
     goalId = (await open(claude, "claude")).payload.goal_id;
   });
 
   after(async () => {
     delete process.env.COUNCIL_PLAN_JOIN_WAIT_MS;
     await claude?.close();
+    await codex?.close();
     rmSync(root, { recursive: true, force: true });
   });
 
-  test("the author is released and told the window was never triggered", async () => {
+  test("hands back to the user without destroying the council", async () => {
     const { payload } = await call(claude, "plan_council_await", { goal_id: goalId, agent: "claude" });
     assert.equal(payload.retry, false);
-    assert.equal(payload.status, "error");
+    assert.equal(payload.status, "active", "a council nobody joined yet must stay open");
     assert.equal(payload.peer_joined, false);
-    assert.match(payload.stop_reason, /codex never joined/);
-    assert.match(payload.note, /run the skill in that window/);
+    assert.match(payload.note, /has not joined after/);
+    assert.match(payload.note, /this council stays open/);
+  });
+
+  test("and the peer can still join the same council afterwards", async () => {
+    const { payload } = await open(codex, "codex");
+    assert.equal(payload.goal_id, goalId, "must join, not start a second one");
+    assert.equal(payload.peer_joined, true);
+    assert.equal(payload.next_step, "Critique the plan for round 1 with plan_council_critique.");
+  });
+});
+
+// The council created in one session and picked up in the next: old by the clock, new by
+// the work. Measuring the wait from started_at made the first await fail instantly, without
+// waiting at all, and then report a five-minute wait that never happened.
+describe("a council picked up in a later session", () => {
+  let root, claude, codex, goalId;
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  before(async () => {
+    root = makeRoot("plan-rejoin");
+    // Long enough that the council goes stale during this test, short enough to run. The
+    // poll budget stays under the step budget so one await call cannot outlive it.
+    process.env.COUNCIL_PLAN_STEP_WAIT_MS = "400";
+    process.env.COUNCIL_POLL_BUDGET_MS = "200";
+    claude = await connect("claude", root);
+    codex = await connect("codex", root);
+    goalId = (await open(claude, "claude")).payload.goal_id;
+  });
+
+  after(async () => {
+    delete process.env.COUNCIL_PLAN_STEP_WAIT_MS;
+    delete process.env.COUNCIL_POLL_BUDGET_MS;
+    await claude?.close();
+    await codex?.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("the wait runs from the latest sign of life, not from creation", async () => {
+    // The council is now older than the whole step budget — as it was on the second real
+    // run, where 32 minutes had passed since a council opened in an earlier session.
+    await pause(600);
+
+    // codex arriving is a sign of life. Measured from creation this council is long past
+    // its budget; measured from the join it has barely started.
+    await open(codex, "codex");
+    const { payload } = await call(claude, "plan_council_await", {
+      goal_id: goalId,
+      agent: "claude",
+    });
+    assert.equal(payload.status, "active", "a council just re-joined must not be errored");
+    assert.equal(payload.peer_joined, true);
+    assert.equal(payload.retry, true);
   });
 });
 

@@ -414,10 +414,18 @@ export function createPlanCouncil(db, { goalId, planPath, projectPath, gitBranch
   return getPlanCouncil(db, goalId);
 }
 
+/**
+ * Record that this agent is present, refreshing the timestamp on a re-open.
+ *
+ * The refresh matters: an open call is proof that someone is alive in that window right
+ * now, so re-triggering the skill restarts the wait clock — which is what a user means by
+ * re-triggering it. Keeping the first join time would leave a council resumed in a later
+ * session looking stale on arrival.
+ */
 export function joinPlanCouncil(db, goalId, agent) {
   db.prepare(
     `INSERT INTO plan_participants (goal_id, agent, joined_at) VALUES (?, ?, ?)
-     ON CONFLICT (goal_id, agent) DO NOTHING`,
+     ON CONFLICT (goal_id, agent) DO UPDATE SET joined_at = excluded.joined_at`,
   ).run(goalId, agent, now());
 }
 

@@ -91,6 +91,26 @@ export function registerPlanTools(server, deps) {
 
   const joined = (goalId) => getPlanParticipants(db(), goalId).map((p) => p.agent);
 
+  /**
+   * When this council last showed a sign of life.
+   *
+   * Not `started_at`. A council opened in one session and picked up in the next is old by
+   * the clock and brand new by the work: the second real run rejoined a council created 32
+   * minutes earlier, measured the wait from its creation, and failed on the very first
+   * await without waiting at all — then reported a five-minute wait that never happened.
+   *
+   * A join is a sign of life, so re-triggering the skill restarts the clock, which is what
+   * the user means by re-triggering it.
+   */
+  function lastActivityAt(council, all) {
+    const times = [new Date(council.started_at).getTime()];
+    for (const p of getPlanParticipants(db(), council.goal_id)) {
+      times.push(new Date(p.joined_at).getTime());
+    }
+    if (all.length) times.push(new Date(all.at(-1).created_at).getTime());
+    return Math.max(...times);
+  }
+
   function view(council, agent) {
     const all = steps(council.goal_id);
     const state = planState(all, council.max_rounds);
@@ -233,6 +253,21 @@ export function registerPlanTools(server, deps) {
           if (existing) {
             joinPlanCouncil(db(), existing.goal_id, agent);
             return existing;
+          }
+
+          // Only the author starts one. The plan is theirs, and they are the only side that
+          // knows which file is under review.
+          //
+          // On the second real run the critic found no open council, listed the plans
+          // directory, picked a file itself and opened a second council on its guess. It
+          // guessed right that time. A critic reviewing a plan nobody asked about is worse
+          // than a critic that waits.
+          if (agent !== AUTHOR) {
+            throw new Error(
+              `${AUTHOR} starts a plan council, because the plan is theirs — do not guess at ` +
+                "a plan file or open one yourself. No council is open yet: tell the user to " +
+                `run the skill in the ${AUTHOR} window, then call plan_council_open again.`,
+            );
           }
 
           if (!plan_path) throw new Error("plan_path is required when starting a plan council");
@@ -470,42 +505,52 @@ export function registerPlanTools(server, deps) {
             return reply(council, agent, { arrived: true, retry: false });
           }
 
-          // Two different waits, because "nobody is coming" and "somebody is working" are
-          // different failures with different right answers.
+          // Two different waits, because "nobody is coming yet" and "somebody joined and
+          // went quiet" are different situations with different right answers.
           //
           // A step here is a research task — reading a plan against a whole codebase — not
           // a submission. Timing it out on the debate mode's five minutes would kill a
-          // healthy council mid-critique and throw away work already done, which is exactly
-          // what the first real run would have hit had the author kept polling.
+          // healthy council mid-critique and throw away work already done.
           const peerHere = joined(goal_id).includes(state.actor);
           const budget = peerHere ? stepWaitMs : joinWaitMs;
-          const since = all.length
-            ? new Date(all.at(-1).created_at).getTime()
-            : new Date(council.started_at).getTime();
+          const since = lastActivityAt(council, all);
+          const waited = Date.now() - since;
 
-          if (Date.now() - since > budget) {
-            const minutes = Math.round(budget / 60_000);
+          if (waited > budget) {
+            const minutes = Math.max(1, Math.round(waited / 60_000));
+
+            // A peer that has not been triggered yet is a not-yet, not a failure. Killing
+            // the council here destroys good work and forces a fresh start: on the second
+            // real run it errored a council the user was about to complete, and the critic
+            // then invented a second one. Hand back to the user and leave this one open.
+            if (!peerHere) {
+              return reply(council, agent, {
+                arrived: false,
+                retry: false,
+                waited_minutes: minutes,
+                note:
+                  `${state.actor} has not joined after ${minutes} minutes. Stop waiting and ` +
+                  "tell the user to run the skill in that window — this council stays open, " +
+                  "so call plan_council_await again once they have. Use council_abandon only " +
+                  "if they want to drop it.",
+              });
+            }
+
             transact(db(), () =>
               setPlanStatus(
                 db(),
                 goal_id,
                 "error",
-                peerHere
-                  ? `${state.actor} joined but did not ${state.phase} round ${state.round} ` +
-                    `within ${minutes} minutes`
-                  : `${state.actor} never joined — the skill was probably never run in that ` +
-                    `window (waited ${minutes} minutes)`,
+                `${state.actor} joined but did not ${state.phase} round ${state.round} ` +
+                  `within ${minutes} minutes`,
               ),
             );
-            const stalled = getPlanCouncil(db(), goal_id);
-            return reply(stalled, agent, {
+            return reply(getPlanCouncil(db(), goal_id), agent, {
               arrived: false,
               retry: false,
-              note: peerHere
-                ? `${state.actor} stopped responding. The plan file keeps every fix applied ` +
-                  "so far; the trail is still readable."
-                : `${state.actor} never joined. Tell the user to run the skill in that window, ` +
-                  "then start a fresh plan council.",
+              note:
+                `${state.actor} stopped responding. The plan file keeps every fix applied ` +
+                "so far; the trail is still readable.",
             });
           }
 
@@ -516,9 +561,7 @@ export function registerPlanTools(server, deps) {
         const state = stateOf(council);
         const peerHere = joined(goal_id).includes(state.actor);
         const all = steps(goal_id);
-        const since = all.length
-          ? new Date(all.at(-1).created_at).getTime()
-          : new Date(council.started_at).getTime();
+        const since = lastActivityAt(council, all);
         const left = Math.max(0, (peerHere ? stepWaitMs : joinWaitMs) - (Date.now() - since));
 
         return reply(council, agent, {
