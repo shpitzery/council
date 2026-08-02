@@ -16,8 +16,15 @@ The user runs this skill in both windows.
 
 ## The loop
 
-1. **`plan_council_open`** — `agent: "claude"`, plus `plan_path` and `project_path`. If
-   Codex opened it first you join it.
+1. **`plan_council_open`** — `agent: "claude"`, plus `plan_path` and `project_path`.
+
+   Opening also clears councils a dead session left behind, and lists them in `cleared`.
+   **Say what was cleared, then tell the user to start Codex** — one line each, then "clean,
+   start Codex in your other window". That handoff is the point: they trigger the second
+   window only once this one is ready for it.
+
+   A council already open on this same plan is resumed, not cleared, so re-running the skill
+   picks up where you left off.
 2. **`plan_council_await`** — blocks until Codex's critique lands. **`retry: true` means
    call it again, and keep calling.** See below — this is the step that goes wrong.
 3. Read `latest_critique`. **Run your `plan-critique-resolver` skill** with that critique
@@ -76,6 +83,10 @@ signal — Codex's is. Reporting READY over a Blocker you did not fix just puts 
 in the trail.
 
 ## How it ends
+
+Once it ends, the council stops blocking on its own — `ready`, `capped` and `error` all
+release. Only `active` and `needs_user` hold the next one up. `plan_council_close` writes
+the record; it does not release anything.
 
 - **`ready`** — Codex reports the plan implementation-ready. This is the real result. From
   round 3 on, only Blocker and High findings hold the plan back; a critic that keeps finding

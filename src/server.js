@@ -93,6 +93,11 @@ const TOTAL_WAIT_MS = num("COUNCIL_TOTAL_WAIT_MS", 5 * 60_000);
 const PLAN_JOIN_WAIT_MS = num("COUNCIL_PLAN_JOIN_WAIT_MS", 5 * 60_000);
 const PLAN_STEP_WAIT_MS = num("COUNCIL_PLAN_STEP_WAIT_MS", 30 * 60_000);
 
+// How long a council must sit untouched before starting a new plan council may clear it.
+// Below this it is treated as possibly live and still blocks, because the peer may be
+// mid-turn in the other window.
+const STALE_AFTER_MS = num("COUNCIL_STALE_AFTER_MS", 15 * 60_000);
+
 const log = (...args) => console.error("[council]", ...args);
 
 let database = null;
@@ -137,6 +142,57 @@ function unfinishedCouncilForAgent(agent) {
     if (draftView(council.goal_id).phase !== "final") return council;
   }
   return null;
+}
+
+/** When a debate council was last touched by anyone. */
+function lastTouchOfCouncil(council) {
+  const times = [new Date(council.updated_at).getTime()];
+  for (const e of getAllEntries(db(), council.goal_id)) {
+    times.push(new Date(e.submitted_at).getTime());
+  }
+  for (const d of getDrafts(db(), council.goal_id)) {
+    times.push(new Date(d.drafted_at).getTime());
+    if (d.reviewed_at) times.push(new Date(d.reviewed_at).getTime());
+  }
+  return Math.max(...times);
+}
+
+/**
+ * Clear debate councils that have sat untouched past `idleMs`, and report what was cleared.
+ *
+ * A council left unfinished by a dead session is the normal case, not the exception — one
+ * user drives both windows by hand, and every run so far has been derailed by leftovers
+ * from the last one. The idle threshold is the safeguard: anything recent might be a peer
+ * mid-turn, so it still blocks rather than being swept.
+ */
+function sweepStaleDebateCouncils(idleMs) {
+  const cleared = [];
+  const seen = new Set();
+
+  for (const agent of AGENTS) {
+    for (let guard = 0; guard < 10; guard += 1) {
+      const council = unfinishedCouncilForAgent(agent);
+      if (!council || seen.has(council.goal_id)) break;
+      seen.add(council.goal_id);
+
+      const idle = Date.now() - lastTouchOfCouncil(council);
+      if (idle <= idleMs) break;
+
+      const minutes = Math.round(idle / 60_000);
+      const was = council.status;
+      transact(db(), () =>
+        setStatus(
+          db(),
+          council.goal_id,
+          "aborted",
+          `cleared automatically: unfinished and untouched for ${minutes} minutes when a ` +
+            "new plan council was started",
+        ),
+      );
+      cleared.push({ goal_id: council.goal_id, mode: "council", was, idle_minutes: minutes });
+    }
+  }
+  return cleared;
 }
 
 /**
@@ -988,7 +1044,9 @@ registerPlanTools(server, {
   pollIntervalMs: POLL_INTERVAL_MS,
   joinWaitMs: PLAN_JOIN_WAIT_MS,
   stepWaitMs: PLAN_STEP_WAIT_MS,
+  staleAfterMs: STALE_AFTER_MS,
   unfinishedDebateCouncil: unfinishedCouncilForAgent,
+  sweepStaleDebateCouncils,
 });
 
 const transport = new StdioServerTransport();

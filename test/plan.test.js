@@ -538,6 +538,104 @@ describe("a joined peer that goes silent", () => {
   });
 });
 
+// Starting a run clears what a dead session left behind. Every run of this so far was
+// derailed by leftovers, because one user drives both windows by hand and the previous
+// session's council is the normal state of the database, not an edge case.
+describe("starting a run clears stale leftovers", () => {
+  let root, claude, codex;
+  // The threshold is 1ms here, so anything left over needs to be measurably older than the
+  // call that sweeps it.
+  const age = () => new Promise((r) => setTimeout(r, 30));
+
+  before(async () => {
+    root = makeRoot("plan-sweep");
+    process.env.COUNCIL_STALE_AFTER_MS = "1";
+    claude = await connect("claude", root);
+    codex = await connect("codex", root);
+  });
+
+  after(async () => {
+    delete process.env.COUNCIL_STALE_AFTER_MS;
+    await claude?.close();
+    await codex?.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("a stale plan council on another plan is cleared and reported", async () => {
+    const old = await open(claude, "claude", { plan_path: "/proj/docs/old.md" });
+    await age();
+    const fresh = await open(claude, "claude", { plan_path: "/proj/docs/new.md" });
+
+    assert.notEqual(fresh.payload.goal_id, old.payload.goal_id);
+    assert.equal(fresh.payload.plan_path, "/proj/docs/new.md");
+    assert.equal(fresh.payload.cleared.length, 1);
+    assert.equal(fresh.payload.cleared[0].goal_id, old.payload.goal_id);
+    assert.equal(fresh.payload.cleared[0].mode, "plan_council");
+    assert.equal(fresh.payload.cleared[0].plan_path, "/proj/docs/old.md");
+  });
+
+  // Resuming yesterday's work is the case that must never be swept, however old it is.
+  test("a council on the same plan is resumed, not cleared", async () => {
+    await age();
+    const again = await open(claude, "claude", { plan_path: "/proj/docs/new.md" });
+    assert.equal(again.payload.plan_path, "/proj/docs/new.md");
+    assert.equal(again.payload.cleared, undefined);
+    assert.equal(again.payload.status, "active");
+  });
+
+  test("the critic never sweeps, even holding a plan path", async () => {
+    const { payload } = await open(codex, "codex", { plan_path: "/proj/docs/other.md" });
+    assert.equal(payload.plan_path, "/proj/docs/new.md", "joins what the author opened");
+    assert.equal(payload.cleared, undefined);
+  });
+
+  test("a stale debate council is cleared too, so it stops blocking", async () => {
+    await call(claude, "council_abandon", { agent: "claude", reason: "clear the plan council" });
+    const debate = await call(claude, "council_open", {
+      agent: "claude",
+      question: "A council nobody finished",
+      project_path: "/proj",
+    });
+    await call(claude, "council_submit", {
+      goal_id: debate.payload.goal_id,
+      agent: "claude",
+      ...entry(),
+    });
+    await age();
+
+    const { payload } = await open(claude, "claude", { plan_path: "/proj/docs/after.md" });
+    assert.equal(payload.status, "active");
+    assert.equal(payload.cleared.length, 1);
+    assert.equal(payload.cleared[0].mode, "council");
+    assert.equal(payload.cleared[0].goal_id, debate.payload.goal_id);
+    await call(claude, "council_abandon", { agent: "claude", reason: "cleanup" });
+  });
+});
+
+describe("a recent council is never swept", () => {
+  let root, claude;
+
+  before(async () => {
+    root = makeRoot("plan-nosweep");
+    // The default 15-minute threshold: nothing in this test is old enough to clear.
+    claude = await connect("claude", root);
+  });
+
+  after(async () => {
+    await claude?.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("it blocks instead, because the peer may be mid-turn", async () => {
+    const first = await open(claude, "claude", { plan_path: "/proj/docs/live.md" });
+    const second = await open(claude, "claude", { plan_path: "/proj/docs/different.md" });
+
+    assert.equal(second.payload.goal_id, first.payload.goal_id, "must not start a second");
+    assert.equal(second.payload.cleared, undefined);
+    assert.match(second.payload.warning, /you asked for \/proj\/docs\/different\.md/);
+  });
+});
+
 // The rules that branch on status have to see both modes. Each of these is a rule that
 // existed before this mode and did not know about it.
 describe("one council at a time, across both modes", () => {

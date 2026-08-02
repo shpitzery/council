@@ -59,7 +59,9 @@ export function registerPlanTools(server, deps) {
     pollIntervalMs,
     joinWaitMs,
     stepWaitMs,
+    staleAfterMs,
     unfinishedDebateCouncil,
+    sweepStaleDebateCouncils,
   } = deps;
 
   const steps = (goalId) => getPlanSteps(db(), goalId);
@@ -234,6 +236,12 @@ export function registerPlanTools(server, deps) {
     },
     async ({ agent, plan_path, project_path, git_branch, max_rounds = 4 }) => {
       try {
+        // Starting a run clears what a dead session left behind, so the user does not have
+        // to. Only the author, only when actually starting (a plan_path is given), and only
+        // for work that has sat untouched — anything recent might be a peer mid-turn, and a
+        // council on this same plan is a resume rather than a leftover.
+        const cleared = agent === AUTHOR && plan_path ? sweepStale(plan_path) : [];
+
         // One council at a time, across both modes. A debate council mid-flight means a
         // peer is blocked waiting on this agent; starting a plan council here would strand
         // it — the deadlock class this project already fixed once.
@@ -299,6 +307,7 @@ export function registerPlanTools(server, deps) {
         // running council would have the model critiquing a file nobody mentioned.
         const wrongPlan = plan_path && plan_path !== council.plan_path;
         return reply(council, agent, {
+          ...(cleared.length ? { cleared } : {}),
           ...(wrongPlan
             ? {
                 warning:
@@ -685,6 +694,47 @@ export function registerPlanTools(server, deps) {
       }
     },
   );
+
+  /**
+   * Clear what a dead session left behind, and report it.
+   *
+   * A plan council about the *same* plan is never swept, however old: that is the user
+   * resuming work, and abandoning it would throw away rounds already spent. Everything else
+   * has to have sat untouched past the stale threshold, so a peer taking its time in the
+   * other window is never mistaken for a leftover.
+   */
+  function sweepStale(planPath) {
+    const cleared = [];
+
+    for (let guard = 0; guard < 10; guard += 1) {
+      const council = getUnfinishedPlanCouncil(db());
+      if (!council || council.plan_path === planPath) break;
+
+      const idle = Date.now() - lastActivityAt(council, steps(council.goal_id));
+      if (idle <= staleAfterMs) break;
+
+      const minutes = Math.round(idle / 60_000);
+      const was = council.status;
+      transact(db(), () =>
+        setPlanStatus(
+          db(),
+          council.goal_id,
+          "aborted",
+          `cleared automatically: unfinished and untouched for ${minutes} minutes when a ` +
+            "new plan council was started on a different plan",
+        ),
+      );
+      cleared.push({
+        goal_id: council.goal_id,
+        mode: "plan_council",
+        was,
+        plan_path: council.plan_path,
+        idle_minutes: minutes,
+      });
+    }
+
+    return [...cleared, ...sweepStaleDebateCouncils(staleAfterMs)];
+  }
 
   function requireOpen(goalId) {
     const council = getPlanCouncil(db(), goalId);
