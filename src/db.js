@@ -139,6 +139,23 @@ export function getActiveCouncilForAgent(db, agent) {
   );
 }
 
+/**
+ * Councils this agent is in whose rounds are over. Whether they are actually finished
+ * depends on the drafting phase, which the caller resolves — a council still owing an
+ * answer must not be treated as done, or the agent will walk away and start another.
+ */
+export function getConcludedCouncilsForAgent(db, agent, statuses) {
+  const marks = statuses.map(() => "?").join(", ");
+  return db
+    .prepare(
+      `SELECT c.* FROM councils c
+       JOIN participants p ON p.goal_id = c.goal_id
+       WHERE p.agent = ? AND c.status IN (${marks})
+       ORDER BY c.started_at DESC`,
+    )
+    .all(agent, ...statuses);
+}
+
 export function createCouncil(db, { goalId, question, projectPath, gitBranch, maxRounds }) {
   const ts = now();
   db.prepare(

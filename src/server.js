@@ -16,6 +16,7 @@ import {
   transact,
   getCouncil,
   getActiveCouncilForAgent,
+  getConcludedCouncilsForAgent,
   createCouncil,
   joinCouncil,
   getParticipants,
@@ -104,6 +105,24 @@ function councilView(council) {
   };
 }
 
+/**
+ * The council this agent still owes work on, if any.
+ *
+ * "Unfinished" is not the same as "active". A council whose rounds ended still owes an
+ * answer, and treating it as done let one agent walk away mid-draft and open a second
+ * council — while its peer sat waiting for a review that was never coming. Two agents,
+ * two councils, each waiting on the other.
+ */
+function unfinishedCouncilForAgent(agent) {
+  const active = getActiveCouncilForAgent(db(), agent);
+  if (active) return active;
+
+  for (const council of getConcludedCouncilsForAgent(db(), agent, DRAFTABLE)) {
+    if (draftView(council.goal_id).phase !== "final") return council;
+  }
+  return null;
+}
+
 /** Whose move it is in the drafting phase, plus the instruction for that move. */
 function draftView(goalId) {
   const drafter = getDrafter(db(), goalId);
@@ -177,8 +196,9 @@ server.registerTool(
           return council;
         }
 
-        // Already in one? Return it rather than starting a second.
-        const mine = getActiveCouncilForAgent(db(), agent);
+        // Already owe work on one? Return it rather than starting a second. This covers
+        // the drafting phase, not just the rounds — an unwritten answer is unfinished work.
+        const mine = unfinishedCouncilForAgent(agent);
         if (mine) return mine;
 
         // The peer may have opened one already. Join it.
@@ -215,6 +235,13 @@ server.registerTool(
       const myLastRound = mine.length ? Math.max(...mine.map((e) => e.round)) : 0;
       const owesThisRound = myLastRound < result.round;
 
+      // The rounds may be over while the answer is not. Say so, or the agent reads
+      // "converged" as "done" and wanders off to open another council.
+      const drafting =
+        DRAFTABLE.includes(result.status) && draftView(result.goal_id).phase !== "final"
+          ? draftView(result.goal_id)
+          : null;
+
       log(
         `open: ${result.goal_id} agent=${agent} round=${result.round} ` +
           `already_submitted=${myLastRound}`,
@@ -229,14 +256,27 @@ server.registerTool(
         waiting_for_peer: !participants.includes(peerOf(agent)),
         your_submitted_rounds: mine.map((e) => e.round),
         your_last_position: mine.length ? mine[mine.length - 1].position : null,
-        next_step: owesThisRound
-          ? `Submit your answer for round ${result.round}.`
-          : `You have already submitted round ${myLastRound}. Do not submit it again — ` +
-            "call council_await_peer to read the peer's answer for that round.",
-        instruction: owesThisRound
-          ? roundInstruction(result, result.round)
-          : "Read your own last position above before continuing, so you do not contradict " +
-            "or disown what you already argued.",
+        ...(drafting ? draftView(result.goal_id) : {}),
+        next_step: drafting
+          ? drafting.next_actor === agent
+            ? `The rounds are over. You owe the ${drafting.phase} — ` +
+              `call council_${drafting.phase === "draft" ? "draft" : "review"}.`
+            : `The rounds are over and the answer is unfinished. Waiting on ` +
+              `${drafting.next_actor} to ${drafting.phase} — call council_await_peer.`
+          : owesThisRound
+            ? `Submit your answer for round ${result.round}.`
+            : `You have already submitted round ${myLastRound}. Do not submit it again — ` +
+              "call council_await_peer to read the peer's answer for that round.",
+        instruction: drafting
+          ? drafting.next_actor === agent
+            ? drafting.phase === "draft"
+              ? DRAFT_INSTRUCTION
+              : REVIEW_INSTRUCTION
+            : "Do not start another council. This one still owes an answer."
+          : owesThisRound
+            ? roundInstruction(result, result.round)
+            : "Read your own last position above before continuing, so you do not contradict " +
+              "or disown what you already argued.",
       });
     } catch (error) {
       return fail(error.message);

@@ -136,6 +136,48 @@ describe("the drafting phase", () => {
     assert.match(file, /Approved by codex/);
   });
 
+  // Regression: Codex saw "converged", read that as finished, and opened a second council
+  // while Claude was mid-draft on the first. Claude then waited for a review that was never
+  // coming, and Codex waited for Claude to join a council it did not know about. Two
+  // agents, two councils, each blocked on the other.
+  test("an unfinished answer blocks starting another council", async () => {
+    const draftRoot = makeRoot("nostart");
+    const c2 = await connect("claude", draftRoot);
+    const x2 = await connect("codex", draftRoot);
+    const id = await finishedCouncil(draftRoot, c2, x2, "Blocking test");
+
+    await call(c2, "council_draft", {
+      goal_id: id,
+      agent: "claude",
+      answer: "An answer awaiting review.",
+    });
+
+    // Codex owes a review. Opening a new council must return the old one instead.
+    const { payload } = await call(x2, "council_open", {
+      agent: "codex",
+      question: "A completely different question",
+      project_path: "/other",
+    });
+    assert.equal(payload.goal_id, id);
+    assert.equal(payload.phase, "review");
+    assert.equal(payload.next_actor, "codex");
+    assert.match(payload.next_step, /You owe the review/);
+
+    // And the drafter is told to wait rather than start something new.
+    const drafterView = await call(c2, "council_open", {
+      agent: "claude",
+      question: "Another different question",
+      project_path: "/other",
+    });
+    assert.equal(drafterView.payload.goal_id, id);
+    assert.match(drafterView.payload.next_step, /Waiting on codex to review/);
+    assert.match(drafterView.payload.instruction, /Do not start another council/);
+
+    await c2.close();
+    await x2.close();
+    rmSync(draftRoot, { recursive: true, force: true });
+  });
+
   test("further drafting is refused once final", async () => {
     const { payload, isError } = await call(claude, "council_draft", {
       goal_id: goalId,
