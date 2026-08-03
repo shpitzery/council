@@ -131,6 +131,8 @@ describe("a plan council, end to end, with no models", () => {
     assert.equal(waited.payload.latest_critique.blockers, 1);
     assert.match(waited.payload.latest_critique.critique, /no rollback/);
     assert.match(waited.payload.instruction, /Run your `plan-critique-resolver` skill/);
+    // The loop only adds; the author is told to keep each fix as small as it can be.
+    assert.match(waited.payload.instruction, /smallest change that settles it/);
   });
 
   test("resolving starts the next round", async () => {
@@ -669,6 +671,23 @@ describe("resuming an existing council", () => {
     assert.equal(payload.resuming.plan_changed_since_critique, false);
     assert.match(payload.next_step, /Stop\. Do not resolve or critique anything yet/);
     assert.equal(payload.instruction, undefined, "no contradictory order to run the resolver");
+  });
+
+  // The loop only ever adds, over four rounds, so a plan can swell into a specification
+  // without anyone noticing. One real run reached 1797 lines that way.
+  test("the plan's size and growth are reported every round", async () => {
+    const before = await open(claude, "claude", { plan_path: planFile });
+    assert.equal(before.payload.plan_lines, 4);
+
+    writeFileSync(planFile, "# Plan\n" + "\nA new step.\n".repeat(20));
+    const { payload } = await call(claude, "plan_council_resolve", {
+      goal_id: goalId,
+      agent: "claude",
+      ...resolution(),
+    });
+    assert.equal(payload.plan_lines, 42);
+    assert.equal(payload.plan_lines_added_last_step, 38, "growth since the critique");
+    assert.equal(payload.plan_lines_added_total, 38);
   });
 
   test("a plan rewritten since the critique is called out", async () => {

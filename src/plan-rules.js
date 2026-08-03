@@ -206,6 +206,11 @@ export const CRITIQUE_INSTRUCTION = [
   "",
   "Do not soften a finding to move the loop along. From round 3 only Blocker and High hold",
   "the plan back, so a real Medium belongs in the critique and will not stall anything.",
+  "",
+  "Name the decision each fix needs; do not draft the text that settles it. `Fix: freeze the",
+  "exception ordering` is a finding. Three paragraphs of ordering is a specification, and the",
+  "author will paste it into the plan — that is how a plan turns into a document nobody can",
+  "implement from.",
 ].join(" ");
 
 export const RESOLVE_INSTRUCTION = [
@@ -216,6 +221,11 @@ export const RESOLVE_INSTRUCTION = [
   "Rejecting a critique needs the reason the skill already produces. Never guess at",
   "something in `Needs User Decision` to keep the loop moving: put it in",
   "`needs_user_decision` and the council hands it back to the user.",
+  "",
+  "Integrate each finding as the smallest change that settles it — an edited line, or the",
+  "decision recorded in a sentence. This loop only ever adds, over up to four rounds, and a",
+  "plan that grows a section per finding stops being something anyone can implement from.",
+  "Watch plan_lines: if a round adds more than it changes, you are writing a specification.",
 ].join(" ");
 
 export const DECIDED_INSTRUCTION = [

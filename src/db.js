@@ -126,6 +126,7 @@ const SCHEMA = [
      author_readiness TEXT,
      decision         TEXT,
      plan_digest      TEXT,
+     plan_lines       INTEGER,
      created_at       TEXT NOT NULL,
      PRIMARY KEY (goal_id, seq)
    )`,
@@ -137,7 +138,10 @@ const SCHEMA = [
 
 // Columns added after a table shipped. CREATE TABLE IF NOT EXISTS does nothing to a table
 // that already exists, so a database in the wild keeps the old shape until it is altered.
-const MIGRATIONS = [["plan_steps", "plan_digest", "TEXT"]];
+const MIGRATIONS = [
+  ["plan_steps", "plan_digest", "TEXT"],
+  ["plan_steps", "plan_lines", "INTEGER"],
+];
 
 export function openDatabase(path) {
   mkdirSync(dirname(path), { recursive: true });
@@ -464,8 +468,8 @@ export function appendPlanStep(db, goalId, step) {
     `INSERT INTO plan_steps
        (goal_id, seq, round, kind, actor, critique, blockers, highs, mediums, lows,
         critic_readiness, applied, rejected, additional, needs_user, author_readiness,
-        decision, plan_digest, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        decision, plan_digest, plan_lines, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     goalId,
     seq,
@@ -485,6 +489,7 @@ export function appendPlanStep(db, goalId, step) {
     step.author_readiness ?? null,
     step.decision ?? null,
     step.plan_digest ?? null,
+    step.plan_lines ?? null,
     now(),
   );
   return seq;

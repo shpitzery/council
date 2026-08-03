@@ -48,20 +48,29 @@ import {
 const AGENTS = [AUTHOR, CRITIC];
 
 /**
- * A fingerprint of the plan file as it stands right now.
+ * The plan file as it stands right now: a fingerprint, and how long it is.
  *
- * Recorded with every step so a resume can tell whether the plan has moved since the
- * critique was written. Resolving a critique against a plan that has since been rewritten
- * produces confident objections to paragraphs that no longer exist.
+ * The fingerprint lets a resume tell whether the plan moved since the critique was written,
+ * because resolving a critique against a rewritten plan produces confident objections to
+ * paragraphs that no longer exist.
  *
- * Null when the file cannot be read — the council never depends on reading the plan, so an
+ * The line count exists because this loop only ever adds. Every round integrates findings
+ * and none removes anything, so a plan can quietly swell into a specification over four
+ * rounds — one real run grew to 1797 lines with no one noticing until the end. Reporting the
+ * size every round makes that visible while it is still happening.
+ *
+ * Nulls when the file cannot be read. The council never depends on reading the plan, so an
  * unreadable one is a missing check rather than a failure.
  */
-function planDigest(path) {
+function planStats(path) {
   try {
-    return createHash("sha256").update(readFileSync(path)).digest("hex").slice(0, 16);
+    const body = readFileSync(path);
+    return {
+      plan_digest: createHash("sha256").update(body).digest("hex").slice(0, 16),
+      plan_lines: body.toString("utf8").split("\n").length,
+    };
   } catch {
-    return null;
+    return { plan_digest: null, plan_lines: null };
   }
 }
 
@@ -133,6 +142,25 @@ export function registerPlanTools(server, deps) {
     return Math.max(...times);
   }
 
+  /**
+   * The plan's current length, and what this council has done to it.
+   *
+   * `plan_lines_added_total` is measured from the size recorded at the very first step, so
+   * it is the growth this council caused rather than the file's whole history.
+   */
+  function planSize(council, all) {
+    const current = planStats(council.plan_path).plan_lines;
+    if (current === null) return { plan_lines: null };
+
+    const sized = all.filter((s) => s.plan_lines != null);
+    return {
+      plan_lines: current,
+      plan_lines_added_last_step:
+        sized.length >= 2 ? sized.at(-1).plan_lines - sized.at(-2).plan_lines : null,
+      plan_lines_added_total: sized.length ? current - sized[0].plan_lines : null,
+    };
+  }
+
   function view(council, agent) {
     const all = steps(council.goal_id);
     const state = planState(all, council.max_rounds);
@@ -160,6 +188,10 @@ export function registerPlanTools(server, deps) {
       phase: state.phase,
       next_actor: state.actor ?? null,
       critiques_so_far: all.filter((s) => s.kind === "critique").length,
+      // How big the plan is, and how much this loop has added to it. Nothing here ever
+      // removes anything, so without a number in front of both models the plan grows into a
+      // specification and nobody notices until it is finished.
+      ...planSize(council, all),
       latest_critique: critique
         ? {
             round: critique.round,
@@ -421,7 +453,7 @@ export function registerPlanTools(server, deps) {
 
           const seq = appendPlanStep(db(), goal_id, {
             ...validateCritique(fields, council, state.round),
-            plan_digest: planDigest(council.plan_path),
+            ...planStats(council.plan_path),
           });
           sync(council);
           return { seq, round: state.round };
@@ -499,7 +531,7 @@ export function registerPlanTools(server, deps) {
 
           const seq = appendPlanStep(db(), goal_id, {
             ...validateResolve(fields, state.round),
-            plan_digest: planDigest(council.plan_path),
+            ...planStats(council.plan_path),
           });
           sync(council);
           return { seq, round: state.round };
@@ -761,7 +793,7 @@ export function registerPlanTools(server, deps) {
     const state = planState(all, council.max_rounds);
     const critique = [...all].reverse().find((s) => s.kind === "critique") ?? null;
     const last = all.at(-1);
-    const current = planDigest(council.plan_path);
+    const current = planStats(council.plan_path).plan_digest;
 
     return {
       round: state.round,

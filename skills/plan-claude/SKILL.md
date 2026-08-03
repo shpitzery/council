@@ -75,6 +75,25 @@ user to start the skill in that window, then call `plan_council_await` again. Do
 it and do not open a fresh one — the council is fine, the other window just was not running
 yet.
 
+## Keep it a plan
+
+A plan is what an implementer works from. It is not a specification, and this loop pushes
+hard toward turning it into one: Codex writes every finding with a `Fix:` clause, nothing in
+four rounds ever *removes* anything, and each round critiques the longer plan the last one
+produced. One real run reached 1797 lines this way, and nobody noticed until it was over.
+
+**Integrate each finding as the smallest change that settles it.** An edited line. A
+decision recorded in a sentence. A finding is not a licence to add a section.
+
+**When a finding genuinely needs a frozen table or an exact sequence, record the decision and
+say where the detail belongs** — the contract doc, the ABI table, the test file. Do not inline
+it. "Exception order is frozen: bad_alloc rethrown first, then SchemaError → 400" is a plan
+step. Three paragraphs of ordering is a specification that has wandered into one.
+
+**Every reply carries `plan_lines`, `plan_lines_added_last_step` and
+`plan_lines_added_total`.** Read them. If a round added more than it changed, say so to the
+user rather than carrying on — they may want to stop and prune before round 3 makes it worse.
+
 ## Rules the server cannot enforce
 
 **Never guess at a `Needs User Decision`.** If the resolver raises one, put it in

@@ -54,6 +54,13 @@ the two windows, counts rounds, and records the trail.
 the plan back, so a real Medium belongs in the critique and will not stall anything. Nothing
 is gained by downgrading it, and the record shows what you said.
 
+**Name the decision the fix needs; do not draft the text that settles it.** `Fix: freeze the
+exception ordering and say which types are rethrown` is a finding. Three paragraphs of
+ordering is a specification — and Claude will paste it into the plan, because your `Fix:`
+clause reads as the change to make. Four rounds of that turn a plan into a document nobody
+can implement from. Watch `plan_lines` in the reply: you are reviewing a plan, and if it is
+swelling every round, say so in the critique.
+
 The server rejects `Ready` while you report Blocker or High findings — but it cannot tell
 whether a Blocker was quietly filed as Medium instead. That part is yours.
 
