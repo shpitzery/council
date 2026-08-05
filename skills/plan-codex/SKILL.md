@@ -7,7 +7,7 @@ description: Use when the user wants you to critique an implementation plan that
 
 Claude wrote the plan. You attack it. Claude answers, edits the plan file, and you attack
 the revision — until you report the plan implementation-ready, or a decision turns out to be
-the user's, or four rounds are up.
+the user's, or five rounds are up.
 
 You are the critic, always. Claude is the author, always.
 
@@ -57,7 +57,7 @@ is gained by downgrading it, and the record shows what you said.
 **Name the decision the fix needs; do not draft the text that settles it.** `Fix: freeze the
 exception ordering and say which types are rethrown` is a finding. Three paragraphs of
 ordering is a specification — and Claude will paste it into the plan, because your `Fix:`
-clause reads as the change to make. Four rounds of that turn a plan into a document nobody
+clause reads as the change to make. Five rounds of that turn a plan into a document nobody
 can implement from. Watch `plan_lines` in the reply: you are reviewing a plan, and if it is
 swelling every round, say so in the critique.
 
@@ -66,7 +66,7 @@ whether a Blocker was quietly filed as Medium instead. That part is yours.
 
 **Read the rejections.** Claude rejects critique points with reasons. If a reason is wrong,
 say so in the next round's critique and quote it. If it is right, drop the point — repeating
-a critique that was answered burns a round of four.
+a critique that was answered burns a round of five.
 
 **Re-read the plan file each round.** The resolver edits it in place. Critiquing the version
 you read last round means critiquing text that no longer exists.
@@ -80,7 +80,7 @@ yourself, and not before. This is the one signal the user acts on.
 - **`needs_user`** — Claude hit a decision that is the user's to make. The council parks.
   Nothing for you to do until it resumes; your `plan_council_await` returns straight away
   saying so.
-- **`capped`** — four rounds without your sign-off. Tell the user plainly that you never
+- **`capped`** — five rounds without your sign-off. Tell the user plainly that you never
   signed off, and what still stands.
 - **`error`** — Claude stopped responding.
 

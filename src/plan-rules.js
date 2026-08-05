@@ -223,7 +223,7 @@ export const RESOLVE_INSTRUCTION = [
   "`needs_user_decision` and the council hands it back to the user.",
   "",
   "Integrate each finding as the smallest change that settles it — an edited line, or the",
-  "decision recorded in a sentence. This loop only ever adds, over up to four rounds, and a",
+  "decision recorded in a sentence. This loop only ever adds, over up to five rounds, and a",
   "plan that grows a section per finding stops being something anyone can implement from.",
   "Watch plan_lines: if a round adds more than it changes, you are writing a specification.",
 ].join(" ");

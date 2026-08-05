@@ -64,7 +64,7 @@ describe("a plan council, end to end, with no models", () => {
     assert.equal(payload.your_role, "author");
     assert.equal(payload.phase, "critique");
     assert.equal(payload.next_actor, "codex");
-    assert.equal(payload.max_rounds, 4);
+    assert.equal(payload.max_rounds, 5);
     assert.match(payload.goal_id, /^\d{4}-\d{2}-\d{2}-plan-/);
     assert.match(payload.next_step, /Waiting on codex to critique/);
     goalId = payload.goal_id;
@@ -673,7 +673,7 @@ describe("resuming an existing council", () => {
     assert.equal(payload.instruction, undefined, "no contradictory order to run the resolver");
   });
 
-  // The loop only ever adds, over four rounds, so a plan can swell into a specification
+  // The loop only ever adds, over five rounds, so a plan can swell into a specification
   // without anyone noticing. One real run reached 1797 lines that way.
   test("the plan's size and growth are reported every round", async () => {
     const before = await open(claude, "claude", { plan_path: planFile });

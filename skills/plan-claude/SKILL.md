@@ -7,7 +7,7 @@ description: Use when the user wants an implementation plan critiqued until it i
 
 You wrote the plan. Codex attacks it. You answer, edit the plan file, and it attacks the
 revision — until it reports the plan implementation-ready, or a decision turns out to be
-the user's, or four rounds are up.
+the user's, or five rounds are up.
 
 This replaces a loop the user runs by hand: paste the plan to Codex, paste its critique
 back, run the resolver, repeat. You are the author, always. Codex is the critic, always.
@@ -79,7 +79,7 @@ yet.
 
 A plan is what an implementer works from. It is not a specification, and this loop pushes
 hard toward turning it into one: Codex writes every finding with a `Fix:` clause, nothing in
-four rounds ever *removes* anything, and each round critiques the longer plan the last one
+five rounds ever *removes* anything, and each round critiques the longer plan the last one
 produced. One real run reached 1797 lines this way, and nobody noticed until it was over.
 
 **Integrate each finding as the smallest change that settles it.** An edited line. A
@@ -122,7 +122,7 @@ the record; it does not release anything.
   round 3 on, only Blocker and High findings hold the plan back; a critic that keeps finding
   Medium issues forever cannot stall it past that.
 - **`needs_user`** — parked on the user's decision. Not an ending; resume it.
-- **`capped`** — four rounds went by without Codex reporting ready. The plan holds every fix
+- **`capped`** — five rounds went by without Codex reporting ready. The plan holds every fix
   applied so far and the last critique says what Codex still objects to. **Tell the user the
   critic never signed off**, and point them at that critique. Do not present a capped plan
   as ready.

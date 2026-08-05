@@ -19,7 +19,7 @@ Claude authors, Codex critiques. Codex runs its `critique-plan` skill; Claude ru
 
 **It stops when the critic says the plan is implementation-ready.** That is a verdict from the side whose job is to find fault, which makes it the strongest stopping rule in the project — the debate mode can only stop on two models agreeing about themselves. The critic cannot declare a plan ready while reporting Blocker or High findings; the server rejects it.
 
-Four rounds at most. From round 3 only Blocker and High hold a plan back, because a thorough critic finds new Medium issues forever — every revision creates new surface. If the resolver hits a decision that is genuinely the user's, the council parks and hands it back rather than letting the author guess to keep the loop moving.
+Five rounds at most. From round 3 only Blocker and High hold a plan back, because a thorough critic finds new Medium issues forever — every revision creates new surface. If the resolver hits a decision that is genuinely the user's, the council parks and hands it back rather than letting the author guess to keep the loop moving.
 
 Both models see how long the plan is and how much each round added. Nothing in the loop ever removes anything, so without that number in front of them a plan quietly grows into a specification nobody can implement from.
 

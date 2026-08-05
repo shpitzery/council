@@ -85,7 +85,7 @@ const SCHEMA = [
      project_path TEXT NOT NULL,
      git_branch   TEXT,
      round        INTEGER NOT NULL DEFAULT 1,
-     max_rounds   INTEGER NOT NULL DEFAULT 4,
+     max_rounds   INTEGER NOT NULL DEFAULT 5,
      status       TEXT NOT NULL DEFAULT 'active',
      stop_reason  TEXT,
      started_at   TEXT NOT NULL,
