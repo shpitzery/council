@@ -270,11 +270,11 @@ server.registerTool(
             "explicitly — the server's working directory does not identify the project.",
         ),
       git_branch: z.string().optional(),
-      max_rounds: z.number().int().min(1).max(10).optional().describe("Default 3."),
+      max_rounds: z.number().int().min(1).max(10).optional().describe("Default 5."),
       goal_id: z.string().optional().describe("Join a specific council rather than the active one."),
     },
   },
-  async ({ agent, question, project_path, git_branch, max_rounds = 3, goal_id }) => {
+  async ({ agent, question, project_path, git_branch, max_rounds = 5, goal_id }) => {
     try {
       // One council at a time holds across both modes, not just this one. A plan council
       // mid-loop means the peer is waiting on a critique or a resolution; starting a debate

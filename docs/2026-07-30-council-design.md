@@ -228,7 +228,7 @@ whose move it is, because there are no moves in sequence.
 | `project_path` | the council folder no longer sits beside the code |
 | `git_branch` | nullable |
 | `round` | current round, starts at 1 |
-| `max_rounds` | default 3 |
+| `max_rounds` | default 5 |
 | `status` | `active` \| `converged` \| `capped` \| `error` \| `aborted` |
 | `started_at`, `updated_at` | |
 
@@ -284,7 +284,7 @@ agent: "claude" | "codex" (required)
 session_id: string        (optional — recorded for the stop hook; see Open decisions)
 project_path: string      (required)
 git_branch: string        (optional)
-max_rounds: integer       (optional, default 3)
+max_rounds: integer       (optional, default 5)
 goal_id: string           (optional — supply to join a specific council)
 ```
 
@@ -527,7 +527,8 @@ The `project_path` + agent fallback is no longer needed and should not be built.
 
 ### Settled defaults
 
-Root `~/.council/`, `max_rounds` 3, await poll 50s per call, 5-minute total cap,
+Root `~/.council/`, `max_rounds` 5 (3 as approved here, raised to 5 on 2026-08-03 to
+match the plan council), await poll 50s per call, 5-minute total cap,
 **Node** + stdio + SQLite.
 
 Node was chosen over the Python of revision 2: Node v25.6.1 ships SQLite built in
