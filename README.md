@@ -3,7 +3,7 @@ An MCP server that runs structured, bounded critique rounds between Claude Code 
 
 Two models, both already working on your problem, both with their own context. Getting one to check the other means copy-pasting a wall of text in each direction, every round — so mostly you don't bother.
 
-council turns that into one command per window. There are two modes over one server and one database.
+council turns that into one command per window. There are three modes over one server and one database.
 
 ## `/council` — the debate
 
@@ -23,17 +23,29 @@ Five rounds at most. From round 3 only Blocker and High hold a plan back, becaus
 
 Both models see how long the plan is and how much each round added. Nothing in the loop ever removes anything, so without that number in front of them a plan quietly grows into a specification nobody can implement from.
 
-## Both modes
+## `/impl-council` — verify what was built
 
-**One council at a time, across both.** A plan council blocks a debate council and the other way round. `council_abandon` is the release for either — closing renders a record, it does not release anything.
+The other two run before code exists. This one runs after: Claude writes the change, Codex verifies it, Claude applies what holds, until Codex approves.
 
-Starting a plan council clears unfinished work a dead session left behind and reports what it cleared. Two things it will never clear: a council on the same plan file, which is you resuming, and anything touched in the last fifteen minutes, which may be a peer mid-turn. Picking up existing work is your call — the author reports what it found and asks before resuming or starting over.
+Codex reads the real diff — the server records a base commit before the author touches anything and measures the change itself, so the side that wrote the code is not the side reporting how much of it there is. Attach a plan and the slice of it in scope, and completeness is checked against that too.
+
+**Its approval is the only verdict in this project that can be backed by execution.** A plan can only be read; code can be run. So an approval is refused unless the review says what was actually checked — though running the tests is not the only way to check, and reading the call sites to show nothing breaks counts. What is refused is "looks correct".
+
+Also refused: any Blocker or High finding still standing, any item of the named scope unimplemented, and a report that does not match the diff — the failure unique to this mode, where an author claims work it did not do or quietly changes something it never mentioned.
+
+Medium findings stop blocking from round 3, as in the plan council. Unimplemented scope never does: complete is the point, and it is a fact rather than a judgement about quality. A plan attached here already survived its own council, so the critic checks the work against it and never reopens it — a step that cannot work as written parks for you instead.
+
+## All three modes
+
+**One council at a time, across all three.** Any mode blocks the other two. `council_abandon` is the release for either — closing renders a record, it does not release anything.
+
+Starting a plan or implementation council clears unfinished work a dead session left behind and reports what it cleared. Two things it will never clear: a council on the same plan file, which is you resuming, and anything touched in the last fifteen minutes, which may be a peer mid-turn. Picking up existing work is your call — the author reports what it found and asks before resuming or starting over.
 
 ## Install
 
 ```bash
 npm install
-npm run install-skills   # copies all four SKILL.md files into ~/.claude and ~/.codex
+npm run install-skills   # copies all seven SKILL.md files into ~/.claude and ~/.codex
 npm test
 ```
 
