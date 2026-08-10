@@ -1,6 +1,7 @@
 ---
 name: impl-council
 description: Use when the user wants code written and then actually verified — "/impl-council implement X", "fix Y and have codex check it", "make this change and verify it". You do the work, Codex verifies the real diff against the plan and the tests, and you apply what holds. Stops when Codex approves.
+argument-hint: '"<what to implement or verify>" [plan:<path>] [scope:<slice>] [base:<git-ref>]'
 ---
 
 # Implementation council
@@ -13,6 +14,44 @@ The other two modes run before code exists. This one runs after, and it is the o
 approval can be backed by something executed.
 
 The user runs this skill in both windows.
+
+## What you were given
+
+```
+/impl-council "<what to implement or verify>" [plan:<path>] [scope:<slice>] [base:<git-ref>]
+```
+
+| Argument | Required | Notes |
+|---|---|---|
+| the task | **yes** | in the user's words; becomes `task` and is what completeness is judged against when there is no plan |
+| `plan:` | no | the plan being implemented. Completeness is then judged against it instead |
+| `scope:` | **when `plan:` is given** | which slice — "W1 only", "sections 1–3" |
+| `base:` | **when the work is already committed** | `HEAD~1`, a branch, a commit |
+
+### When something is missing
+
+**No task.** Do not invent one. If the conversation makes the work unambiguous — the user
+just asked for a change, or says "verify what you did" — use that, and say in one line what
+you recorded as the task so they can correct it. If it is not unambiguous, ask. A wrong task
+is not cosmetic: it is the yardstick Codex judges completeness against when no plan is
+attached.
+
+**`plan:` given, no `scope:`.** Ask, once: the whole plan, or a named part? Do not assume the
+whole plan. Guessing wrong floods every round with gaps that were never meant to be done yet,
+and the real ones drown.
+
+**No `plan:` at all.** Fine — that is the normal case for a change with no plan behind it. Do
+not go looking for a plan file to attach. Completeness is then judged against the task text.
+
+**No `base:`.** Check before assuming, since it is not visible from the task text: run
+`git status --porcelain` and `git log --oneline -3` in the project. Uncommitted work needs no
+base; work you already committed needs one. If the user's words point at a commit — "verify
+the last commit", "check what I pushed" — pass `base_ref` accordingly rather than finding out
+from an empty diff two calls later.
+
+**Nothing at all — bare `/impl-council`.** Ask what to verify or implement. Do not open a
+council on a guess; an implementation council on the wrong task blocks every other mode until
+someone abandons it.
 
 ## The loop
 
