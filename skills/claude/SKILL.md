@@ -1,6 +1,7 @@
 ---
 name: council
 description: Use when the user wants a second model to check, challenge, or help decide something — "ask codex", "get a second opinion", "have them argue this out", "/council". Runs bounded critique rounds between this session and a Codex session, each keeping its own context, and returns a verdict with the disagreements intact.
+argument-hint: '"<question to decide>"'
 ---
 
 # Council
@@ -10,6 +11,30 @@ bounded number of rounds. Both of you already hold context the other lacks. The 
 not to agree — it is to surface where you disagree and why.
 
 The user runs this skill in both windows. You are one participant, not the chairman.
+
+## What you were given
+
+```
+/council "<question to decide>"
+```
+
+The question is the only argument, and it is required to *start* a council. Joining one Codex
+already opened needs nothing — the question is already recorded.
+
+### When it is missing
+
+**No question.** If the conversation makes it obvious — the user just asked something and
+said "ask codex" — use that, and say in one line what you recorded as the question. Round 1
+is answered independently, so a question neither side can see the other's reading of has to
+be right the first time.
+
+If it is not obvious, ask. Do not compose a question from what you assume they meant: a
+council answers the question it was given, thoroughly, and a wrong one costs both windows a
+full run.
+
+**Bare `/council` when Codex may have opened one.** Call `council_open` with just
+`agent: "claude"` — no question. If Codex started one you join it and read the question there.
+If nothing is open, you will be told the question is required; then ask.
 
 ## The loop
 

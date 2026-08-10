@@ -771,7 +771,7 @@ describe("one council at a time, across both modes", () => {
       reason: "wrong plan file",
     });
     assert.equal(payload.status, "aborted");
-    assert.match(payload.note, /either mode/);
+    assert.match(payload.note, /any mode/);
 
     const fresh = await call(claude, "council_open", {
       agent: "claude",

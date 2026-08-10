@@ -131,9 +131,68 @@ const SCHEMA = [
      PRIMARY KEY (goal_id, seq)
    )`,
 
+  // The implementation council. The third mode, and the first one that runs *after* code is
+  // written: the critic checks that what was asked is actually done and actually works,
+  // against the diff and against the plan when there is one.
+  `CREATE TABLE IF NOT EXISTS impl_councils (
+     goal_id       TEXT PRIMARY KEY,
+     task          TEXT NOT NULL,
+     project_path  TEXT NOT NULL,
+     git_branch    TEXT,
+     plan_path     TEXT,
+     plan_scope    TEXT,
+     base_ref      TEXT NOT NULL,
+     dirty_at_open INTEGER NOT NULL DEFAULT 0,
+     round         INTEGER NOT NULL DEFAULT 1,
+     max_rounds    INTEGER NOT NULL DEFAULT 5,
+     status        TEXT NOT NULL DEFAULT 'active',
+     stop_reason   TEXT,
+     started_at    TEXT NOT NULL,
+     updated_at    TEXT NOT NULL
+   )`,
+
+  `CREATE TABLE IF NOT EXISTS impl_participants (
+     goal_id   TEXT NOT NULL REFERENCES impl_councils(goal_id) ON DELETE CASCADE,
+     agent     TEXT NOT NULL,
+     joined_at TEXT NOT NULL,
+     PRIMARY KEY (goal_id, agent)
+   )`,
+
+  // Append-only, as plan_steps is, and for the same reason: a decision hands the round back
+  // to the author, who then reports twice in one round without overwriting anything.
+  `CREATE TABLE IF NOT EXISTS impl_steps (
+     goal_id             TEXT NOT NULL REFERENCES impl_councils(goal_id) ON DELETE CASCADE,
+     seq                 INTEGER NOT NULL,
+     round               INTEGER NOT NULL,
+     kind                TEXT NOT NULL,
+     actor               TEXT NOT NULL,
+     summary             TEXT,
+     applied             TEXT,
+     rejected            TEXT,
+     needs_user          TEXT,
+     findings            TEXT,
+     blockers            INTEGER,
+     highs               INTEGER,
+     mediums             INTEGER,
+     lows                INTEGER,
+     gaps                INTEGER,
+     coverage            TEXT,
+     verdict             TEXT,
+     verification        TEXT,
+     report_matches_diff TEXT,
+     mismatch            TEXT,
+     plan_defect         TEXT,
+     decision            TEXT,
+     diff_digest         TEXT,
+     diff_lines          INTEGER,
+     created_at          TEXT NOT NULL,
+     PRIMARY KEY (goal_id, seq)
+   )`,
+
   "CREATE INDEX IF NOT EXISTS entries_by_round ON entries (goal_id, round)",
   "CREATE INDEX IF NOT EXISTS councils_by_status ON councils (status)",
   "CREATE INDEX IF NOT EXISTS plan_councils_by_status ON plan_councils (status)",
+  "CREATE INDEX IF NOT EXISTS impl_councils_by_status ON impl_councils (status)",
 ];
 
 // Columns added after a table shipped. CREATE TABLE IF NOT EXISTS does nothing to a table
@@ -504,6 +563,113 @@ export function setPlanStatus(db, goalId, status, stopReason = null) {
 
 export function setPlanRound(db, goalId, round) {
   db.prepare("UPDATE plan_councils SET round = ?, updated_at = ? WHERE goal_id = ?").run(
+    round,
+    now(),
+    goalId,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The implementation council
+// ---------------------------------------------------------------------------
+
+export const IMPL_STATUSES = ["active", "ready", "capped", "needs_user", "error", "aborted"];
+export const IMPL_UNFINISHED = ["active", "needs_user"];
+
+export function getImplCouncil(db, goalId) {
+  return db.prepare("SELECT * FROM impl_councils WHERE goal_id = ?").get(goalId) ?? null;
+}
+
+/** Both agents are in every implementation council, so this takes no agent. */
+export function getUnfinishedImplCouncil(db) {
+  const marks = IMPL_UNFINISHED.map(() => "?").join(", ");
+  return (
+    db
+      .prepare(
+        `SELECT * FROM impl_councils WHERE status IN (${marks})
+         ORDER BY started_at DESC LIMIT 1`,
+      )
+      .get(...IMPL_UNFINISHED) ?? null
+  );
+}
+
+export function getLatestImplCouncil(db) {
+  return db.prepare("SELECT * FROM impl_councils ORDER BY started_at DESC LIMIT 1").get() ?? null;
+}
+
+export function createImplCouncil(db, c) {
+  const ts = now();
+  db.prepare(
+    `INSERT INTO impl_councils
+       (goal_id, task, project_path, git_branch, plan_path, plan_scope, base_ref,
+        dirty_at_open, round, max_rounds, status, started_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 'active', ?, ?)`,
+  ).run(
+    c.goalId,
+    c.task,
+    c.projectPath,
+    c.gitBranch ?? null,
+    c.planPath ?? null,
+    c.planScope ?? null,
+    c.baseRef,
+    c.dirtyAtOpen ? 1 : 0,
+    c.maxRounds,
+    ts,
+    ts,
+  );
+  return getImplCouncil(db, c.goalId);
+}
+
+export function joinImplCouncil(db, goalId, agent) {
+  db.prepare(
+    `INSERT INTO impl_participants (goal_id, agent, joined_at) VALUES (?, ?, ?)
+     ON CONFLICT (goal_id, agent) DO UPDATE SET joined_at = excluded.joined_at`,
+  ).run(goalId, agent, now());
+}
+
+export function getImplParticipants(db, goalId) {
+  return db
+    .prepare("SELECT * FROM impl_participants WHERE goal_id = ? ORDER BY agent")
+    .all(goalId);
+}
+
+export function getImplSteps(db, goalId) {
+  return db.prepare("SELECT * FROM impl_steps WHERE goal_id = ? ORDER BY seq").all(goalId);
+}
+
+const IMPL_STEP_COLUMNS = [
+  "summary", "applied", "rejected", "needs_user",
+  "findings", "blockers", "highs", "mediums", "lows", "gaps", "coverage",
+  "verdict", "verification", "report_matches_diff", "mismatch", "plan_defect",
+  "decision", "diff_digest", "diff_lines",
+];
+
+export function appendImplStep(db, goalId, step) {
+  const last = db.prepare("SELECT MAX(seq) AS seq FROM impl_steps WHERE goal_id = ?").get(goalId);
+  const seq = (last?.seq ?? 0) + 1;
+  const cols = ["goal_id", "seq", "round", "kind", "actor", ...IMPL_STEP_COLUMNS, "created_at"];
+  const marks = cols.map(() => "?").join(", ");
+  db.prepare(`INSERT INTO impl_steps (${cols.join(", ")}) VALUES (${marks})`).run(
+    goalId,
+    seq,
+    step.round,
+    step.kind,
+    step.actor,
+    ...IMPL_STEP_COLUMNS.map((c) => step[c] ?? null),
+    now(),
+  );
+  return seq;
+}
+
+export function setImplStatus(db, goalId, status, stopReason = null) {
+  if (!IMPL_STATUSES.includes(status)) throw new Error(`unknown impl status: ${status}`);
+  db.prepare(
+    "UPDATE impl_councils SET status = ?, stop_reason = ?, updated_at = ? WHERE goal_id = ?",
+  ).run(status, stopReason, now(), goalId);
+}
+
+export function setImplRound(db, goalId, round) {
+  db.prepare("UPDATE impl_councils SET round = ?, updated_at = ? WHERE goal_id = ?").run(
     round,
     now(),
     goalId,

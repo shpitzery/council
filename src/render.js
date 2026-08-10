@@ -360,6 +360,178 @@ export function writePlanTrail(council, steps) {
   return path;
 }
 
+// ---------------------------------------------------------------------------
+// The implementation council
+//
+// The artifact is the working tree. These files are the trail beside it: what was claimed,
+// what was verified and how, and what was rejected and why.
+// ---------------------------------------------------------------------------
+
+export function writeImplBrief(council) {
+  const dir = ensureCouncilDir(council.goal_id);
+  const lines = [
+    `# Implementation council — ${council.goal_id}`,
+    "",
+    "## Task",
+    "",
+    council.task,
+    "",
+    "## Context",
+    "",
+    `- Project: ${council.project_path}`,
+    council.git_branch ? `- Branch: ${council.git_branch}` : null,
+    `- Base commit: ${council.base_ref}`,
+    council.plan_path ? `- Plan: ${council.plan_path}` : "- Plan: none attached",
+    council.plan_scope ? `- Scope in this council: ${council.plan_scope}` : null,
+    council.dirty_at_open
+      ? "- **The tree already had uncommitted changes when this opened**, so the diff from " +
+        "base includes work that predates this task."
+      : null,
+    `- Started: ${council.started_at}`,
+    `- Maximum rounds: ${council.max_rounds}`,
+    "- claude implements, codex verifies. Codex never edits the code.",
+    "",
+    "## How this ends",
+    "",
+    "It stops when codex approves — which it cannot do while any Blocker or High finding",
+    "stands, while any item in scope is unimplemented, while the report does not match the",
+    "diff, or without saying what it actually verified.",
+    "",
+    "From round 3 only Blocker and High findings hold the work back. Unimplemented scope",
+    "always does: complete is the point.",
+    "",
+  ].filter((l) => l !== null);
+  writeFileSync(join(dir, "brief.md"), lines.join("\n"));
+}
+
+const implStepLines = (step) => {
+  if (step.kind === "review") {
+    return [
+      `### Round ${step.round} — verification by ${step.actor}`,
+      "",
+      `Findings: ${step.blockers} Blocker, ${step.highs} High, ${step.mediums} Medium, ` +
+        `${step.lows} Low. Gaps: ${step.gaps ?? 0}. Verdict: **${step.verdict}**.`,
+      "",
+      step.findings,
+      "",
+      "**Completeness**",
+      "",
+      step.coverage ?? "No plan attached, or nothing missing.",
+      "",
+      "**What was verified**",
+      "",
+      step.verification,
+      "",
+      `**Report matches the diff:** ${step.report_matches_diff}`,
+      ...(step.mismatch ? ["", step.mismatch] : []),
+      ...(step.plan_defect ? ["", "**Defect in the plan itself**", "", step.plan_defect] : []),
+      "",
+    ];
+  }
+  if (step.kind === "decision") {
+    return [`### Round ${step.round} — the user decided`, "", step.decision, ""];
+  }
+  return [
+    `### Round ${step.round} — implementation by ${step.actor}`,
+    "",
+    step.summary,
+    "",
+    "**Applied from the last review**",
+    "",
+    step.applied ?? "None.",
+    "",
+    "**Review points rejected**",
+    "",
+    step.rejected ?? "None.",
+    "",
+    "**Needs user decision**",
+    "",
+    step.needs_user ?? "None.",
+    "",
+  ];
+};
+
+export function writeImplStep(goalId, step) {
+  ensureCouncilDir(goalId);
+  writeFileSync(
+    join(councilDir(goalId), `r${step.round}-${step.kind}-${step.seq}.md`),
+    implStepLines(step).join("\n") + "\n",
+  );
+}
+
+export function implSummaryBlock(council, steps) {
+  const reviews = steps.filter((s) => s.kind === "review");
+  const last = reviews.length ? reviews[reviews.length - 1] : null;
+  const parked = steps.filter((s) => s.needs_user || s.plan_defect).at(-1);
+
+  const lines = [
+    `IMPL COUNCIL ${council.goal_id} — ${council.status} after ` +
+      `${reviews.length} review${reviews.length === 1 ? "" : "s"}`,
+    "",
+    `Task:             ${council.task}`,
+    `Base commit:      ${council.base_ref}`,
+    council.plan_path
+      ? `Plan:             ${council.plan_path}${council.plan_scope ? ` (scope: ${council.plan_scope})` : ""}`
+      : "Plan:             none attached",
+    `Stopped because:  ${council.stop_reason ?? "not recorded"}`,
+    "",
+    last
+      ? `Last verdict:     ${last.verdict} — ${last.blockers} Blocker, ${last.highs} High, ` +
+        `${last.mediums} Medium, ${last.gaps ?? 0} gap(s)`
+      : "Last verdict:     none",
+    "",
+  ];
+
+  if (last?.verification && council.status === "ready") {
+    lines.push("Approved on this evidence:", "", last.verification, "");
+  }
+
+  if (council.status === "needs_user" && parked) {
+    lines.push(
+      "Waiting on you to decide:",
+      "",
+      parked.plan_defect ?? parked.needs_user,
+      "",
+      "Answer it with impl_council_resume, or abandon with council_abandon.",
+      "",
+    );
+  }
+
+  if (council.status === "capped") {
+    lines.push(
+      "The cap stopped this, not the critic. It never approved the work — read the last",
+      "review above before treating this as done.",
+      "",
+    );
+  }
+
+  lines.push(`Full trail:       ${councilDir(council.goal_id)}`);
+  return lines.join("\n");
+}
+
+export function writeImplTrail(council, steps) {
+  const dir = ensureCouncilDir(council.goal_id);
+  const lines = [
+    `# Implementation council trail — ${council.goal_id}`,
+    "",
+    "```",
+    implSummaryBlock(council, steps),
+    "```",
+    "",
+    "## Task",
+    "",
+    council.task,
+    "",
+    "## Record",
+    "",
+  ];
+  for (const step of steps) lines.push(...implStepLines(step));
+
+  const path = join(dir, "trail.md");
+  writeFileSync(path, lines.join("\n"));
+  return path;
+}
+
 /** `YYYY-MM-DD-<slug>` from the question, with a suffix if that id is taken. */
 export function makeGoalId(question, exists) {
   const date = new Date().toISOString().slice(0, 10);

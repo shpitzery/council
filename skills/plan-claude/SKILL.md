@@ -1,6 +1,7 @@
 ---
 name: plan-council
 description: Use when the user wants an implementation plan critiqued until it is ready to build — "get codex to review this plan", "run the plan past codex", "/plan-council". Automates the critique-plan / plan-critique-resolver loop against a Codex session, editing the plan file in place, and stops when the critic says the plan is implementation-ready.
+argument-hint: '<plan-path> [fresh]'
 ---
 
 # Plan council
@@ -13,6 +14,34 @@ This replaces a loop the user runs by hand: paste the plan to Codex, paste its c
 back, run the resolver, repeat. You are the author, always. Codex is the critic, always.
 
 The user runs this skill in both windows.
+
+## What you were given
+
+```
+/plan-council <plan-path> [fresh]
+```
+
+| Argument | Required | Notes |
+|---|---|---|
+| the plan path | **yes** | the file Codex critiques and you edit in place |
+| `fresh` | no | discard a council already running on this plan and start at round 1 |
+
+### When something is missing
+
+**No plan path.** If the conversation names exactly one plan file, use it and say which one
+you took. Otherwise **ask**.
+
+Do not go looking. Listing a plans directory and picking the newest is exactly what went
+wrong once already — Codex, with no council open, found a plan file itself and opened a
+council on its guess. It guessed right that time. A council on the wrong plan edits the wrong
+file in place, and the resolver's edits are not undoable.
+
+**The plan does not exist at that path.** Say so and stop. This mode revises a plan; it does
+not write one. If there is no plan yet, that is a different job.
+
+**Bare `/plan-council` with nothing in the conversation.** Ask which plan. Do not open a
+council to find out — an open council blocks every other mode until it is finished or
+abandoned.
 
 ## The loop
 

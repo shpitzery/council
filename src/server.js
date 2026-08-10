@@ -40,7 +40,8 @@ import {
   CONFIDENCES,
 } from "./db.js";
 import { registerPlanTools } from "./plan.js";
-import { planState } from "./plan-rules.js";
+import { registerImplTools } from "./impl.js";
+import { MODES, unfinishedElsewhere, findAnyCouncil, sweepStale } from "./modes.js";
 import {
   validateSubmission,
   evaluateStopRules,
@@ -144,74 +145,6 @@ function unfinishedCouncilForAgent(agent) {
   return null;
 }
 
-/** When a debate council was last touched by anyone. */
-function lastTouchOfCouncil(council) {
-  const times = [new Date(council.updated_at).getTime()];
-  for (const e of getAllEntries(db(), council.goal_id)) {
-    times.push(new Date(e.submitted_at).getTime());
-  }
-  for (const d of getDrafts(db(), council.goal_id)) {
-    times.push(new Date(d.drafted_at).getTime());
-    if (d.reviewed_at) times.push(new Date(d.reviewed_at).getTime());
-  }
-  return Math.max(...times);
-}
-
-/**
- * Clear debate councils that have sat untouched past `idleMs`, and report what was cleared.
- *
- * A council left unfinished by a dead session is the normal case, not the exception — one
- * user drives both windows by hand, and every run so far has been derailed by leftovers
- * from the last one. The idle threshold is the safeguard: anything recent might be a peer
- * mid-turn, so it still blocks rather than being swept.
- */
-function sweepStaleDebateCouncils(idleMs) {
-  const cleared = [];
-  const seen = new Set();
-
-  for (const agent of AGENTS) {
-    for (let guard = 0; guard < 10; guard += 1) {
-      const council = unfinishedCouncilForAgent(agent);
-      if (!council || seen.has(council.goal_id)) break;
-      seen.add(council.goal_id);
-
-      const idle = Date.now() - lastTouchOfCouncil(council);
-      if (idle <= idleMs) break;
-
-      const minutes = Math.round(idle / 60_000);
-      const was = council.status;
-      transact(db(), () =>
-        setStatus(
-          db(),
-          council.goal_id,
-          "aborted",
-          `cleared automatically: unfinished and untouched for ${minutes} minutes when a ` +
-            "new plan council was started",
-        ),
-      );
-      cleared.push({ goal_id: council.goal_id, mode: "council", was, idle_minutes: minutes });
-    }
-  }
-  return cleared;
-}
-
-/**
- * A one-line description of an unfinished plan council, for the rules that have to see
- * across both modes: the one-at-a-time guard, the kill switch, and council_status.
- */
-function planCouncilBrief(council) {
-  const state = planState(getPlanSteps(db(), council.goal_id), council.max_rounds);
-  return {
-    goal_id: council.goal_id,
-    mode: "plan_council",
-    plan_path: council.plan_path,
-    status: council.status,
-    phase: state.phase,
-    next_actor: state.actor ?? null,
-    round: state.round,
-  };
-}
-
 /** Whose move it is in the drafting phase, plus the instruction for that move. */
 function draftView(goalId) {
   const drafter = getDrafter(db(), goalId);
@@ -276,23 +209,22 @@ server.registerTool(
   },
   async ({ agent, question, project_path, git_branch, max_rounds = 5, goal_id }) => {
     try {
-      // One council at a time holds across both modes, not just this one. A plan council
-      // mid-loop means the peer is waiting on a critique or a resolution; starting a debate
-      // council here would strand it.
+      // One council at a time holds across every mode, not just this one. Work in flight
+      // anywhere means a peer is waiting on this agent somewhere; starting another strands it.
       //
-      // This fails rather than returning the plan council the way an unfinished debate
-      // council is returned: the two payloads are different shapes, and a plan council
-      // handed back from council_open would be read as a debate council to submit into.
-      const plan = getUnfinishedPlanCouncil(db());
-      if (plan) {
-        const brief = planCouncilBrief(plan);
+      // This fails rather than handing the other council back the way an unfinished debate
+      // council is handed back: the payloads are different shapes, and another mode's council
+      // returned from council_open would be read as one to submit into.
+      const [blocked] = unfinishedElsewhere(db(), agent, "council");
+      if (blocked) {
         return fail(
-          `a plan council is unfinished: ${brief.goal_id} (${brief.status}, ` +
-            `${brief.phase} owed by ${brief.next_actor ?? "the user"}). Finish it with ` +
-            "plan_council_open, or release it with council_abandon, before starting a " +
-            "council. plan_council_close does not release anything — it only renders the " +
-            "trail — so calling it here will leave you blocked.",
-          { blocking: brief, release_with: "council_abandon" },
+          `a ${blocked.mode.label} is unfinished: ${blocked.brief.goal_id} ` +
+            `(${blocked.brief.status}, ${blocked.brief.phase ?? "in progress"} owed by ` +
+            `${blocked.brief.next_actor ?? "the user"}). Finish it with ` +
+            `${blocked.mode.reopen}, or release it with council_abandon, before starting a ` +
+            "council. Closing does not release anything — it only renders the record — so " +
+            "calling it here will leave you blocked.",
+          { blocking: blocked.brief, release_with: "council_abandon" },
         );
       }
 
@@ -844,27 +776,34 @@ server.registerTool(
   },
   async ({ agent, reason, goal_id }) => {
     try {
-      // One kill switch for both modes. Two would be one more than anyone will remember
+      // One kill switch for every mode. Two would be one more than anyone will remember
       // while locked out, and being locked out is exactly when this gets called.
-      const plan = goal_id ? getPlanCouncil(db(), goal_id) : getUnfinishedPlanCouncil(db());
-      if (plan) {
-        if (plan.status === "aborted") {
-          return ok({ ok: true, ...planCouncilBrief(plan), note: "already abandoned" });
+      const found = goal_id
+        ? findAnyCouncil(db(), goal_id)
+        : MODES.map((mode) => {
+            const council = mode.findUnfinished(db(), agent);
+            return council ? { mode, council } : null;
+          }).find(Boolean);
+
+      if (found && found.mode.name !== "council") {
+        const { mode } = found;
+        if (found.council.status === "aborted") {
+          return ok({ ok: true, ...mode.brief(db(), found.council), note: "already abandoned" });
         }
         transact(db(), () =>
-          setPlanStatus(db(), plan.goal_id, "aborted", `abandoned by ${agent}: ${reason}`),
+          mode.abort(db(), found.council.goal_id, `abandoned by ${agent}: ${reason}`),
         );
-        log(`abandon: ${plan.goal_id} (plan council) by=${agent}`);
+        log(`abandon: ${found.council.goal_id} (${mode.name}) by=${agent}`);
         return ok({
           ok: true,
-          ...planCouncilBrief(getPlanCouncil(db(), plan.goal_id)),
+          ...mode.brief(db(), mode.get(db(), found.council.goal_id)),
           note:
-            "Abandoned. The peer is released on its next call, the trail stays readable, " +
-            "and you can now open a new council of either mode.",
+            "Abandoned. The peer is released on its next call, the record stays readable, " +
+            "and you can now open a new council of any mode.",
         });
       }
 
-      const council = goal_id ? getCouncil(db(), goal_id) : unfinishedCouncilForAgent(agent);
+      const council = found?.council ?? null;
       if (!council) {
         return fail(goal_id ? `no council with goal_id ${goal_id}` : "you have no unfinished council");
       }
@@ -907,14 +846,18 @@ server.registerTool(
     try {
       const council = goal_id ? getCouncil(db(), goal_id) : getActiveCouncilForAgent(db(), agent);
       if (!council) {
-        // "No active council" is a misleading answer to give an agent that is mid-plan
-        // council. Point at the mode that actually holds its work.
-        const plan = goal_id ? getPlanCouncil(db(), goal_id) : getUnfinishedPlanCouncil(db());
-        if (plan) {
+        // "No active council" is a misleading answer to give an agent that is mid-council in
+        // another mode. Point at whichever one actually holds its work.
+        const other = goal_id
+          ? findAnyCouncil(db(), goal_id)
+          : unfinishedElsewhere(db(), agent, "council")[0];
+        if (other && other.mode.name !== "council") {
           return ok({
             ok: true,
-            ...planCouncilBrief(plan),
-            note: "This is a plan council, not a debate council. Call plan_council_open for it.",
+            ...other.mode.brief(db(), other.council),
+            note:
+              `This is a ${other.mode.label}, not a debate council. Call ` +
+              `${other.mode.reopen} for it.`,
           });
         }
         return fail(goal_id ? `no council with goal_id ${goal_id}` : "no active council");
@@ -1045,8 +988,23 @@ registerPlanTools(server, {
   joinWaitMs: PLAN_JOIN_WAIT_MS,
   stepWaitMs: PLAN_STEP_WAIT_MS,
   staleAfterMs: STALE_AFTER_MS,
-  unfinishedDebateCouncil: unfinishedCouncilForAgent,
-  sweepStaleDebateCouncils,
+  unfinishedElsewhere,
+  sweepStale,
+});
+
+registerImplTools(server, {
+  db,
+  ok,
+  fail,
+  sleep,
+  log,
+  pollBudgetMs: POLL_BUDGET_MS,
+  pollIntervalMs: POLL_INTERVAL_MS,
+  joinWaitMs: PLAN_JOIN_WAIT_MS,
+  stepWaitMs: PLAN_STEP_WAIT_MS,
+  staleAfterMs: STALE_AFTER_MS,
+  unfinishedElsewhere,
+  sweepStale,
 });
 
 const transport = new StdioServerTransport();

@@ -89,8 +89,8 @@ export function registerPlanTools(server, deps) {
     joinWaitMs,
     stepWaitMs,
     staleAfterMs,
-    unfinishedDebateCouncil,
-    sweepStaleDebateCouncils,
+    unfinishedElsewhere,
+    sweepStale,
   } = deps;
 
   const steps = (goalId) => getPlanSteps(db(), goalId);
@@ -300,19 +300,23 @@ export function registerPlanTools(server, deps) {
         // to. Only the author, only when actually starting (a plan_path is given), and only
         // for work that has sat untouched — anything recent might be a peer mid-turn, and a
         // council on this same plan is a resume rather than a leftover.
-        const cleared = agent === AUTHOR && plan_path ? sweepStale(plan_path, fresh) : [];
+        const cleared = agent === AUTHOR && plan_path ? sweepForOpen(plan_path, fresh) : [];
 
         // One council at a time, across both modes. A debate council mid-flight means a
         // peer is blocked waiting on this agent; starting a plan council here would strand
         // it — the deadlock class this project already fixed once.
-        const debate = unfinishedDebateCouncil(agent);
-        if (debate) {
+        const [blocked] = unfinishedElsewhere(db(), agent, "plan_council");
+        if (blocked) {
           return fail(
-            `you have an unfinished council: ${debate.goal_id} (${debate.status}). ` +
-              "Finish it, or release it with council_abandon, before starting a plan " +
-              "council. council_close does not release anything — it only renders the " +
-              "record — so calling it here will leave you blocked.",
-            { blocking_goal_id: debate.goal_id, blocking_mode: "council", release_with: "council_abandon" },
+            `you have an unfinished ${blocked.mode.label}: ${blocked.brief.goal_id} ` +
+              `(${blocked.brief.status}). Finish it, or release it with council_abandon, ` +
+              "before starting a plan council. Closing does not release anything — it only " +
+              "renders the record — so calling it here will leave you blocked.",
+            {
+              blocking_goal_id: blocked.brief.goal_id,
+              blocking_mode: blocked.mode.name,
+              release_with: "council_abandon",
+            },
           );
         }
 
@@ -819,44 +823,19 @@ export function registerPlanTools(server, deps) {
    * has to have sat untouched past the stale threshold, so a peer taking its time in the
    * other window is never mistaken for a leftover.
    */
-  function sweepStale(planPath, force = false) {
-    const cleared = [];
-
-    for (let guard = 0; guard < 10; guard += 1) {
-      const council = getUnfinishedPlanCouncil(db());
-      if (!council) break;
-
-      // `force` is the user saying start over, which is the only thing that overrides the
-      // same-plan protection. Without it, a council on this plan is a resume.
-      const sameplan = council.plan_path === planPath;
-      if (sameplan && !force) break;
-
-      const idle = Date.now() - lastActivityAt(council, steps(council.goal_id));
-      if (!force && idle <= staleAfterMs) break;
-
-      const minutes = Math.round(idle / 60_000);
-      const was = council.status;
-      transact(db(), () =>
-        setPlanStatus(
-          db(),
-          council.goal_id,
-          "aborted",
-          force
-            ? `cleared on request: the user asked to start again on ${planPath}`
-            : `cleared automatically: unfinished and untouched for ${minutes} minutes when ` +
-              "a new plan council was started on a different plan",
-        ),
-      );
-      cleared.push({
-        goal_id: council.goal_id,
-        mode: "plan_council",
-        was,
-        plan_path: council.plan_path,
-        idle_minutes: minutes,
-      });
-    }
-
-    return [...cleared, ...sweepStaleDebateCouncils(staleAfterMs)];
+  /**
+   * Clear what a dead session left behind, and report it.
+   *
+   * A council on the *same* plan is never swept, however old: that is the user resuming, and
+   * abandoning it would throw away rounds already spent. `force` is the user saying start
+   * over, and is the only thing that overrides it.
+   */
+  function sweepForOpen(planPath, force = false) {
+    return sweepStale(db(), force ? -1 : staleAfterMs, {
+      agent: AUTHOR,
+      protect: (mode, council) =>
+        !force && mode.name === "plan_council" && council.plan_path === planPath,
+    });
   }
 
   function requireOpen(goalId) {
