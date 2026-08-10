@@ -527,8 +527,9 @@ The `project_path` + agent fallback is no longer needed and should not be built.
 
 ### Settled defaults
 
-Root `~/.council/`, `max_rounds` 5 (3 as approved here, raised to 5 on 2026-08-03 to
-match the plan council), await poll 50s per call, 5-minute total cap,
+Root `~/.council/`, `max_rounds` 10 (3 as approved here; raised to 5 on 2026-08-03 to
+match the plan council, then to 10 on 2026-08-09 after runs took about seven rounds to
+converge), await poll 50s per call, 5-minute total cap,
 **Node** + stdio + SQLite.
 
 Node was chosen over the Python of revision 2: Node v25.6.1 ships SQLite built in

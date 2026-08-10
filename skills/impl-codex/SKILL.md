@@ -75,7 +75,7 @@ settled plan because you would have written it differently.
 ## Read the rejections
 
 Claude rejects findings with reasons. If a reason is wrong, quote it in the next round. If it
-is right, drop the point — repeating an answered finding burns one of five rounds.
+is right, drop the point — repeating an answered finding burns one of ten rounds.
 
 ## How it ends
 

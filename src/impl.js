@@ -315,7 +315,7 @@ export function registerImplTools(server, deps) {
                 "is empty.",
             ),
           git_branch: z.string().optional(),
-          max_rounds: z.number().int().min(1).max(10).optional().describe("Default 5."),
+          max_rounds: z.number().int().min(1).max(20).optional().describe("Default 10."),
           fresh: z
             .boolean()
             .optional()
@@ -330,7 +330,7 @@ export function registerImplTools(server, deps) {
         plan_scope,
         base_ref,
         git_branch,
-        max_rounds = 5,
+        max_rounds = 10,
         fresh = false,
       }) => {
         try {

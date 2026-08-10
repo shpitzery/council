@@ -203,11 +203,11 @@ server.registerTool(
             "explicitly — the server's working directory does not identify the project.",
         ),
       git_branch: z.string().optional(),
-      max_rounds: z.number().int().min(1).max(10).optional().describe("Default 5."),
+      max_rounds: z.number().int().min(1).max(20).optional().describe("Default 10."),
       goal_id: z.string().optional().describe("Join a specific council rather than the active one."),
     },
   },
-  async ({ agent, question, project_path, git_branch, max_rounds = 5, goal_id }) => {
+  async ({ agent, question, project_path, git_branch, max_rounds = 10, goal_id }) => {
     try {
       // One council at a time holds across every mode, not just this one. Work in flight
       // anywhere means a peer is waiting on this agent somewhere; starting another strands it.

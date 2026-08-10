@@ -55,7 +55,7 @@ const AGENTS = [AUTHOR, CRITIC];
  * paragraphs that no longer exist.
  *
  * The line count exists because this loop only ever adds. Every round integrates findings
- * and none removes anything, so a plan can quietly swell into a specification over five
+ * and none removes anything, so a plan can quietly swell into a specification over ten
  * rounds — one real run grew to 1797 lines with no one noticing until the end. Reporting the
  * size every round makes that visible while it is still happening.
  *
@@ -283,7 +283,7 @@ export function registerPlanTools(server, deps) {
               "the server's working directory does not identify the project.",
           ),
         git_branch: z.string().optional(),
-        max_rounds: z.number().int().min(1).max(10).optional().describe("Default 5."),
+        max_rounds: z.number().int().min(1).max(20).optional().describe("Default 10."),
         fresh: z
           .boolean()
           .optional()
@@ -294,7 +294,7 @@ export function registerPlanTools(server, deps) {
           ),
       },
     },
-    async ({ agent, plan_path, project_path, git_branch, max_rounds = 5, fresh = false }) => {
+    async ({ agent, plan_path, project_path, git_branch, max_rounds = 10, fresh = false }) => {
       try {
         // Starting a run clears what a dead session left behind, so the user does not have
         // to. Only the author, only when actually starting (a plan_path is given), and only
