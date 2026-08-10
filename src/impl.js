@@ -305,6 +305,15 @@ export function registerImplTools(server, deps) {
               "Which part of the plan is in scope — 'W1 and W2A'. Omit only when the whole " +
                 "plan is meant to be done now, or the critic will report the rest as missing.",
             ),
+          base_ref: z
+            .string()
+            .optional()
+            .describe(
+              "What to measure the change from. Defaults to HEAD, which is right when the " +
+                "work has not started. Pass HEAD~1, a branch, or a commit to review work " +
+                "that is already committed — otherwise the base contains it and the diff " +
+                "is empty.",
+            ),
           git_branch: z.string().optional(),
           max_rounds: z.number().int().min(1).max(10).optional().describe("Default 5."),
           fresh: z
@@ -313,7 +322,17 @@ export function registerImplTools(server, deps) {
             .describe("Abandon the council on this task and start again. Only when the user says so."),
         },
       },
-      async ({ agent, task, project_path, plan_path, plan_scope, git_branch, max_rounds = 5, fresh = false }) => {
+      async ({
+        agent,
+        task,
+        project_path,
+        plan_path,
+        plan_scope,
+        base_ref,
+        git_branch,
+        max_rounds = 5,
+        fresh = false,
+      }) => {
         try {
           const cleared = agent === AUTHOR && task ? sweepForOpen(task, fresh) : [];
 
@@ -350,13 +369,21 @@ export function registerImplTools(server, deps) {
             if (!task) throw new Error("task is required when starting an implementation council");
             if (!project_path) throw new Error("project_path is required when starting");
 
-            const head = git(project_path, ["rev-parse", "HEAD"]);
-            if (!head) {
+            // Default HEAD, which is right when the work has not started yet. A caller
+            // reviewing work that is already committed has to name an earlier ref, or the
+            // base contains the very change under review and the diff comes out empty.
+            const wanted = base_ref ?? "HEAD";
+            const resolved = git(project_path, ["rev-parse", "--verify", `${wanted}^{commit}`]);
+            if (!resolved) {
               throw new Error(
-                `${project_path} is not a git repository, or git could not read it. This mode ` +
-                  "measures the change as a diff from a base commit, so it needs one.",
+                base_ref
+                  ? `${project_path} has no commit at ${base_ref}. Pass a ref git can resolve ` +
+                    "— HEAD~1, a branch name, or a commit sha."
+                  : `${project_path} is not a git repository, or has no commits yet. This mode ` +
+                    "measures the change as a diff from a base commit, so it needs one.",
               );
             }
+            const head = resolved;
             const status = git(project_path, ["status", "--porcelain"]);
 
             const id = makeGoalId(
@@ -397,12 +424,18 @@ export function registerImplTools(server, deps) {
                     "fresh:true, which discards this council.",
                 }
               : {}),
+            // Dirty at open has two very different meanings and the council cannot tell
+            // them apart. Say both, and make the author pick — reporting it only as
+            // "work that predates this task" reads exactly backwards when the uncommitted
+            // changes ARE the work being verified.
             ...(council.dirty_at_open && !offer
               ? {
                   warning:
-                    "The working tree already had uncommitted changes when this opened, so the " +
-                    "diff from base includes work that predates this task. Say so to the user " +
-                    "and to the critic.",
+                    "The working tree already had uncommitted changes when this opened, so " +
+                    "they are inside the diff from base. Either they are the work you are " +
+                    "having verified — which is fine, and is how you review something already " +
+                    "written — or they are unrelated changes that will be reviewed by " +
+                    "accident. Say which, to the user and in your report.",
                 }
               : {}),
           });
@@ -471,7 +504,23 @@ export function registerImplTools(server, deps) {
           const council = getImplCouncil(db(), goal_id);
           writeImplStep(goal_id, steps(goal_id).find((s) => s.seq === result.seq));
           log(`impl report: ${goal_id} round=${result.round} status=${council.status}`);
-          return reply(council, agent);
+
+          // Nothing to verify. Usually the base is wrong: work that was already committed
+          // sits inside HEAD, so the diff against it is empty and the critic would review
+          // nothing and approve it. That silent approval is the worst outcome this mode has.
+          const { diff_lines } = diffStats(council);
+          return reply(council, agent, {
+            ...(diff_lines === 0
+              ? {
+                  warning:
+                    `The diff against ${council.base_ref.slice(0, 8)} is empty — there is ` +
+                    "nothing for the critic to verify. If the work is already committed, the " +
+                    "base contains it: abandon this council and open a new one with a base_ref " +
+                    "from before the work, such as HEAD~1. Tell the user rather than letting " +
+                    "the critic approve an empty change.",
+                }
+              : {}),
+          });
         } catch (error) {
           return fail(error.message, { field: error.field ?? null });
         }

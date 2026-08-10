@@ -20,15 +20,31 @@ The user runs this skill in both windows.
    and `plan_path` plus `plan_scope` when a plan exists.
 
    **Call this before you touch anything.** It records the current commit as the base, and
-   every diff is measured from it. Open after editing and the base already contains your work.
+   every diff is measured from it.
+
+   **Unless the work already exists** — the user asking you to verify something you just
+   built is a normal way to use this, not a mistake. Then the base has to sit *before* the
+   work:
+
+   | The work is | Pass |
+   |---|---|
+   | not written yet | nothing — the default `HEAD` is right |
+   | written, uncommitted | nothing — `HEAD` still predates it, and the diff picks it up |
+   | already committed | `base_ref` — `HEAD~1`, a branch, or the commit before you started |
+
+   Get this wrong on committed work and the base contains the change: the diff is empty and
+   Codex verifies nothing. The report call warns you when that happens — do not push past it.
 
    It also clears councils a dead session left behind, in `cleared`. Say what was cleared,
    then **tell the user to start Codex**. If the reply carries `resuming`, stop and ask
    whether to resume or start over — `fresh: true` discards.
 
-2. **Do the work.** Normally, as you would without any of this.
+2. **Do the work.** Normally, as you would without any of this. Skip this step when the work
+   already exists and you are having it verified.
 
-3. **`impl_council_report`** — what you changed and why, file by file where it matters.
+3. **`impl_council_report`** — what you changed and why, file by file where it matters. If
+   the tree was already dirty when you opened, say whether those changes are the work under
+   review or something unrelated that will otherwise be verified by accident.
 
 4. **`impl_council_await`** — until Codex's verification lands. `retry: true` means call
    again, and keep calling.

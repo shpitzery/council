@@ -27,7 +27,9 @@ Both models see how long the plan is and how much each round added. Nothing in t
 
 The other two run before code exists. This one runs after: Claude writes the change, Codex verifies it, Claude applies what holds, until Codex approves.
 
-Codex reads the real diff — the server records a base commit before the author touches anything and measures the change itself, so the side that wrote the code is not the side reporting how much of it there is. Attach a plan and the slice of it in scope, and completeness is checked against that too.
+Codex reads the real diff — the server records a base commit and measures the change itself, so the side that wrote the code is not the side reporting how much of it there is. Attach a plan and the slice of it in scope, and completeness is checked against that too.
+
+It also runs on work already written: leave the changes uncommitted and the default base picks them up, or name an earlier `base_ref` for work already committed. Get that wrong and the base contains the change, so the diff is empty — the council says so rather than letting the critic approve nothing.
 
 **Its approval is the only verdict in this project that can be backed by execution.** A plan can only be read; code can be run. So an approval is refused unless the review says what was actually checked — though running the tests is not the only way to check, and reading the call sites to show nothing breaks counts. What is refused is "looks correct".
 

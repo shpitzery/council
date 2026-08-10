@@ -596,3 +596,91 @@ describe("one council at a time, across all three modes", () => {
     await call(claude, "council_abandon", { agent: "claude", reason: "cleanup" });
   });
 });
+
+// Reviewing work that is already written is the common case, not the exception — the user
+// asks for a change, sees it land, and only then wants it checked.
+describe("verifying work that already exists", () => {
+  let root, repo, claude, codex;
+
+  before(async () => {
+    root = makeRoot("impl-existing");
+    repo = makeRepo("existing");
+    claude = await connect("claude", root);
+    codex = await connect("codex", root);
+  });
+
+  after(async () => {
+    await claude?.close();
+    await codex?.close();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  const git = (...args) => execFileSync("git", args, { cwd: repo, stdio: "ignore" });
+
+  test("uncommitted work is already inside the diff, and the warning says so", async () => {
+    writeFileSync(join(repo, "app.js"), "export const one = 1;\nexport const already = 2;\n");
+
+    const { payload } = await call(claude, "impl_council_open", {
+      agent: "claude",
+      task: "verify what I already wrote",
+      project_path: repo,
+    });
+    assert.equal(payload.dirty_at_open, true);
+    assert.ok(payload.diff_lines > 0, "the existing work is what the critic will read");
+    assert.match(payload.warning, /they are the work you are having verified/);
+    assert.match(payload.warning, /or they are unrelated changes/);
+
+    await call(claude, "council_abandon", { agent: "claude", reason: "cleanup" });
+  });
+
+  // The bad case: committed work sits inside HEAD, so a default base makes the diff empty
+  // and the critic would verify nothing at all.
+  test("committed work with the default base leaves nothing to verify, and says so", async () => {
+    git("add", "-A");
+    git("commit", "-qm", "the work");
+
+    const opened = await call(claude, "impl_council_open", {
+      agent: "claude",
+      task: "verify the commit",
+      project_path: repo,
+    });
+    assert.equal(opened.payload.diff_lines, 0);
+
+    const { payload } = await call(claude, "impl_council_report", {
+      goal_id: opened.payload.goal_id,
+      agent: "claude",
+      ...report(),
+    });
+    assert.match(payload.warning, /diff against .* is empty/);
+    assert.match(payload.warning, /base_ref from before the work/);
+
+    await call(claude, "council_abandon", { agent: "claude", reason: "cleanup" });
+  });
+
+  test("naming an earlier base brings the committed work back into view", async () => {
+    const { payload } = await call(claude, "impl_council_open", {
+      agent: "claude",
+      task: "verify the commit properly",
+      project_path: repo,
+      base_ref: "HEAD~1",
+    });
+    assert.ok(payload.diff_lines > 0, "the commit is now inside the diff");
+    assert.match(payload.base_ref, /^[0-9a-f]{40}$/, "the ref is resolved to a commit, not stored raw");
+    assert.equal(payload.dirty_at_open, false);
+
+    await call(claude, "council_abandon", { agent: "claude", reason: "cleanup" });
+  });
+
+  test("a base git cannot resolve is refused, naming what to pass instead", async () => {
+    const { payload, isError } = await call(claude, "impl_council_open", {
+      agent: "claude",
+      task: "bad base",
+      project_path: repo,
+      base_ref: "no-such-ref",
+    });
+    assert.equal(isError, true);
+    assert.match(payload.error, /no commit at no-such-ref/);
+    assert.match(payload.error, /HEAD~1, a branch name, or a commit sha/);
+  });
+});
