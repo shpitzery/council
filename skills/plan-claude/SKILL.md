@@ -67,6 +67,16 @@ with nothing open, it will sit there telling the user to run your window instead
    now.` on its own line. That handoff is the point: they trigger the second window only once
    this one is ready for it.
 
+   **Report `max_rounds` in that opening line — `Cap: 10 rounds.`** It is the council's own
+   cap, fixed when it was opened, not whatever this skill file says today. A number the user
+   does not expect means the server process is running older code than the files on disk: it
+   loads once per window and never reloads, so a window left open across a change keeps the
+   old cap. Restarting this window is the fix, and it is worth doing before the rounds start
+   rather than discovering the cap from the outside when it fires.
+
+   A council carried over by `resuming` keeps the cap it was opened with, so restarting the
+   window will not raise it. Say the number either way.
+
    **If the reply carries `resuming`, stop there and ask.** A council on this plan already
    has work in it. Show the user the round, how old it is, what the waiting critique found,
    and whether `plan_changed_since_critique` is true — then ask: resume, or start over?

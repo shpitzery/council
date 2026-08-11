@@ -57,6 +57,13 @@ If nothing is open, you will be told the question is required; then ask.
 
 1. **`council_open`** — `agent: "claude"`, plus `question` and `project_path` if you are
    first. If Codex already opened one, you join it automatically.
+
+   **Say `max_rounds` when you report the council is open — `Cap: 10 rounds.`** It is this
+   council's cap, fixed when it was opened, not whatever this file says today. A number the
+   user does not expect means the server process predates a change to the default: it loads
+   once per window and never reloads, so a window left open across a change keeps the old
+   cap. Restarting the window fixes it for the next council, not this one. When you joined a
+   council Codex opened, the cap is theirs — say the number anyway.
 2. **`council_submit`** — your answer. On round 1 you have not seen Codex's answer and must
    not guess at it.
 3. **`council_await_peer`** — blocks until Codex answers, then returns it. If the reply has

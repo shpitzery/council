@@ -105,6 +105,12 @@ Never say it before the council exists. Codex's skill refuses to open one itself
    but **do not hand over to Codex yet**; that comes after step 3. If the reply carries
    `resuming`, stop and ask whether to resume or start over — `fresh: true` discards.
 
+   **Report `max_rounds` there too — `Cap: 10 rounds.`** It is this council's cap, fixed when
+   it was opened, not whatever this file says today. A number the user does not expect means
+   the server process predates a change to the default: it loads once per window and never
+   reloads, so a window left open across a change keeps the old cap. Restarting this window
+   fixes it for the next council; one carried over by `resuming` keeps the cap it has.
+
 2. **Do the work.** Normally, as you would without any of this. Skip this step when the work
    already exists and you are having it verified.
 
