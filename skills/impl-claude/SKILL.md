@@ -1,7 +1,7 @@
 ---
 name: impl-council
 description: Use when the user wants code written and then actually verified — "/impl-council implement X", "fix Y and have codex check it", "make this change and verify it". You do the work, Codex verifies the real diff against the plan and the tests, and you apply what holds. Stops when Codex approves.
-argument-hint: '<what to implement or verify> [plan:<path>] [scope:<slice>] [base:<git-ref>]'
+argument-hint: '<what to implement or verify> [plan:<path>] [scope:<slice>] [base:<git-ref>] · start Codex only after I say "Start Codex now"'
 ---
 
 # Implementation council
@@ -57,6 +57,29 @@ from an empty diff two calls later.
 council on a guess; an implementation council on the wrong task blocks every other mode until
 someone abandons it.
 
+## Telling the user when to start Codex
+
+The user runs the skill in the Codex window by hand, and they cannot see what is happening
+in yours. **They wait for you to say so.**
+
+Say it once, on its own line, exactly: **`Start Codex now.`**
+
+**Say it after `impl_council_report` succeeds — not after `impl_council_open`.** This mode
+differs from the other two on purpose:
+
+- Codex has nothing to verify until the report and the diff exist. Started earlier it only
+  waits.
+- Waiting costs it. Codex's thirty-minute budget runs from the last thing that happened, and
+  its own join counts as one. Bring it in before you start coding and the clock is running
+  while you write; a change that takes forty minutes times its wait out for no reason.
+
+So: open, report what was `cleared`, then **do the work in silence**. Report. Then hand over.
+
+When the work already exists and you are only having it verified, open and report land back
+to back — the handoff comes seconds later, and that is fine. Same rule, nothing special.
+
+Never say it before the council exists. Codex's skill refuses to open one itself.
+
 ## The loop
 
 1. **`impl_council_open`** — `agent: "claude"`, `task` in the user's words, `project_path`,
@@ -78,9 +101,9 @@ someone abandons it.
    Get this wrong on committed work and the base contains the change: the diff is empty and
    Codex verifies nothing. The report call warns you when that happens — do not push past it.
 
-   It also clears councils a dead session left behind, in `cleared`. Say what was cleared,
-   then **tell the user to start Codex**. If the reply carries `resuming`, stop and ask
-   whether to resume or start over — `fresh: true` discards.
+   It also clears councils a dead session left behind, in `cleared`. Say what was cleared —
+   but **do not hand over to Codex yet**; that comes after step 3. If the reply carries
+   `resuming`, stop and ask whether to resume or start over — `fresh: true` discards.
 
 2. **Do the work.** Normally, as you would without any of this. Skip this step when the work
    already exists and you are having it verified.
@@ -88,6 +111,9 @@ someone abandons it.
 3. **`impl_council_report`** — what you changed and why, file by file where it matters. If
    the tree was already dirty when you opened, say whether those changes are the work under
    review or something unrelated that will otherwise be verified by accident.
+
+   **On round 1 only, this is where you hand over**: once the report lands, say `Start Codex
+   now.` on its own line. Later rounds need nothing — Codex is already in the loop.
 
 4. **`impl_council_await`** — until Codex's verification lands. `retry: true` means call
    again, and keep calling.

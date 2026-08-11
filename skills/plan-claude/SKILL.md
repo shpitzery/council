@@ -1,7 +1,7 @@
 ---
 name: plan-council
 description: Use when the user wants an implementation plan critiqued until it is ready to build — "get codex to review this plan", "run the plan past codex", "/plan-council". Automates the critique-plan / plan-critique-resolver loop against a Codex session, editing the plan file in place, and stops when the critic says the plan is implementation-ready.
-argument-hint: '<plan-path> [fresh]'
+argument-hint: '<plan-path> [fresh] · start Codex only after I say "Start Codex now"'
 ---
 
 # Plan council
@@ -43,14 +43,29 @@ not write one. If there is no plan yet, that is a different job.
 council to find out — an open council blocks every other mode until it is finished or
 abandoned.
 
+## Telling the user when to start Codex
+
+The user runs the skill in the Codex window by hand, and they cannot see what is happening
+in yours. **They wait for you to say so.**
+
+Say it once, on its own line, exactly: **`Start Codex now.`**
+
+Say it **after `plan_council_open` succeeds and after you have reported what was `cleared`**
+— and, if the reply carried `resuming`, only once the user has answered resume-or-start-over.
+The critic moves first in this mode, so there is nothing else to do first: open, report the
+state, hand over.
+
+Never say it before the council exists. Codex's skill refuses to open one — told to start
+with nothing open, it will sit there telling the user to run your window instead.
+
 ## The loop
 
 1. **`plan_council_open`** — `agent: "claude"`, plus `plan_path` and `project_path`.
 
    Opening also clears councils a dead session left behind, and lists them in `cleared`.
-   **Say what was cleared, then tell the user to start Codex** — one line each, then "clean,
-   start Codex in your other window". That handoff is the point: they trigger the second
-   window only once this one is ready for it.
+   **Say what was cleared, then give the handoff line** — one line each, then `Start Codex
+   now.` on its own line. That handoff is the point: they trigger the second window only once
+   this one is ready for it.
 
    **If the reply carries `resuming`, stop there and ask.** A council on this plan already
    has work in it. Show the user the round, how old it is, what the waiting critique found,

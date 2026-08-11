@@ -1,7 +1,7 @@
 ---
 name: council
 description: Use when the user wants a second model to check, challenge, or help decide something — "ask codex", "get a second opinion", "have them argue this out", "/council". Runs bounded critique rounds between this session and a Codex session, each keeping its own context, and returns a verdict with the disagreements intact.
-argument-hint: '<question to decide>'
+argument-hint: '<question to decide> · start Codex only after I say "Start Codex now"'
 ---
 
 # Council
@@ -32,6 +32,22 @@ be right the first time.
 If it is not obvious, ask. Do not compose a question from what you assume they meant: a
 council answers the question it was given, thoroughly, and a wrong one costs both windows a
 full run.
+
+## Telling the user when to start Codex
+
+The user runs the skill in the Codex window by hand, and they cannot see what is happening
+in yours. **They wait for you to say so.**
+
+Say it once, on its own line, exactly: **`Start Codex now.`**
+
+Say it **immediately after `council_open` succeeds** — the question is recorded, and round 1
+is answered independently, so Codex can start the moment the council exists. Do not wait
+until you have written your own answer; the two of you are meant to be thinking at the same
+time.
+
+Never say it before `council_open` returns. If they trigger Codex first, Codex opens the
+council and you join theirs — workable, but the question is then whatever Codex recorded,
+not the one you were given.
 
 **Bare `/council` when Codex may have opened one.** Call `council_open` with just
 `agent: "claude"` — no question. If Codex started one you join it and read the question there.
