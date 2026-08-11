@@ -1,7 +1,7 @@
 ---
 name: impl-council
 description: Use when the user wants code written and then actually verified — "/impl-council implement X", "fix Y and have codex check it", "make this change and verify it". You do the work, Codex verifies the real diff against the plan and the tests, and you apply what holds. Stops when Codex approves.
-argument-hint: '"<what to implement or verify>" [plan:<path>] [scope:<slice>] [base:<git-ref>]'
+argument-hint: '<what to implement or verify> [plan:<path>] [scope:<slice>] [base:<git-ref>]'
 ---
 
 # Implementation council
@@ -18,8 +18,12 @@ The user runs this skill in both windows.
 ## What you were given
 
 ```
-/impl-council "<what to implement or verify>" [plan:<path>] [scope:<slice>] [base:<git-ref>]
+/impl-council <what to implement or verify> [plan:<path>] [scope:<slice>] [base:<git-ref>]
 ```
+
+Nothing is parsed into arguments — the whole line arrives as text and you pick out what you
+need. Quotes are never required. The `plan:` `scope:` `base:` markers are a convention for
+saying which is which, not syntax; a user who writes them as a sentence means the same thing.
 
 | Argument | Required | Notes |
 |---|---|---|

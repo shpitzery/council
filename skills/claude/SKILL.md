@@ -1,7 +1,7 @@
 ---
 name: council
 description: Use when the user wants a second model to check, challenge, or help decide something — "ask codex", "get a second opinion", "have them argue this out", "/council". Runs bounded critique rounds between this session and a Codex session, each keeping its own context, and returns a verdict with the disagreements intact.
-argument-hint: '"<question to decide>"'
+argument-hint: '<question to decide>'
 ---
 
 # Council
@@ -15,10 +15,11 @@ The user runs this skill in both windows. You are one participant, not the chair
 ## What you were given
 
 ```
-/council "<question to decide>"
+/council <question to decide>
 ```
 
-The question is the only argument, and it is required to *start* a council. Joining one Codex
+Everything after the command is the question — no quotes needed, and nothing is parsed
+into separate arguments. It is required to *start* a council. Joining one Codex
 already opened needs nothing — the question is already recorded.
 
 ### When it is missing
