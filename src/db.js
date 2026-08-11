@@ -202,6 +202,47 @@ const MIGRATIONS = [
   ["plan_steps", "plan_lines", "INTEGER"],
 ];
 
+// Column defaults that moved after a table shipped. Same cause as MIGRATIONS — the CREATE
+// statements above never touch an existing table — but SQLite has no ALTER for a default,
+// so the only fix is to rebuild the table from the schema in this file.
+//
+// Nothing reads these defaults today: every create* function passes max_rounds explicitly.
+// They are worth correcting anyway, because a schema on disk that disagrees with the one
+// here is a trap set for the first insert that omits the column, and the value it would
+// have written silently — 4 — is the cap from three revisions ago.
+const DEFAULTS = [
+  ["councils", "max_rounds", "10"],
+  ["plan_councils", "max_rounds", "10"],
+  ["impl_councils", "max_rounds", "10"],
+];
+
+/**
+ * Rebuild one table from its CREATE statement in SCHEMA, carrying the rows across.
+ *
+ * Only the columns present in both shapes are copied, so this stays safe if it ever runs
+ * against a table that MIGRATIONS has not caught up on. Dropping the table drops its
+ * indexes with it; the caller replays SCHEMA afterwards to put them back.
+ */
+function rebuild(db, table) {
+  const create = SCHEMA.find((s) => s.includes(`IF NOT EXISTS ${table} (`));
+  if (!create) throw new Error(`no CREATE statement for ${table}`);
+
+  const tmp = `${table}__rebuild`;
+  db.prepare(create.replace(`IF NOT EXISTS ${table} (`, `${tmp} (`)).run();
+
+  const after = new Set(db.prepare(`PRAGMA table_info(${tmp})`).all().map((c) => c.name));
+  const shared = db
+    .prepare(`PRAGMA table_info(${table})`)
+    .all()
+    .map((c) => c.name)
+    .filter((name) => after.has(name))
+    .join(", ");
+
+  db.prepare(`INSERT INTO ${tmp} (${shared}) SELECT ${shared} FROM ${table}`).run();
+  db.prepare(`DROP TABLE ${table}`).run();
+  db.prepare(`ALTER TABLE ${tmp} RENAME TO ${table}`).run();
+}
+
 export function openDatabase(path) {
   mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
@@ -214,6 +255,33 @@ export function openDatabase(path) {
       db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run();
     }
   }
+
+  const stale = DEFAULTS.filter(([table, column, want]) =>
+    db
+      .prepare(`PRAGMA table_info(${table})`)
+      .all()
+      .some((c) => c.name === column && String(c.dflt_value) !== want),
+  );
+
+  if (stale.length) {
+    // Foreign keys must be off across the rebuild, or dropping a parent table cascades the
+    // children away — and the pragma is a no-op inside a transaction, so it goes outside.
+    db.prepare("PRAGMA foreign_keys = OFF").get();
+    try {
+      transact(db, () => {
+        for (const [table] of stale) rebuild(db, table);
+      });
+      // The children now point at a table that was dropped and recreated under the same
+      // name. Prove that survived rather than assuming it.
+      const orphans = db.prepare("PRAGMA foreign_key_check").all();
+      if (orphans.length) throw new Error(`rebuild left ${orphans.length} orphaned row(s)`);
+      // DROP TABLE took the indexes with it. These are all IF NOT EXISTS.
+      for (const statement of SCHEMA) db.prepare(statement).run();
+    } finally {
+      db.prepare("PRAGMA foreign_keys = ON").get();
+    }
+  }
+
   return db;
 }
 
