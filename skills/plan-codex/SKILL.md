@@ -54,6 +54,12 @@ the two windows, counts rounds, and records the trail.
 the plan back, so a real Medium belongs in the critique and will not stall anything. Nothing
 is gained by downgrading it, and the record shows what you said.
 
+**Expect your Mediums and Lows to be deferred from round 3 on.** Claude must account for
+each one in a `deferred` block, and deferring is the default — they no longer hold the plan
+back, and applying one costs length for no readiness. That is the rule working, not Claude
+ignoring you. Do not re-file a deferred finding at a higher severity to force it in; if it
+truly blocks implementation, it was a High to begin with and you should say so.
+
 **Name the decision the fix needs; do not draft the text that settles it.** `Fix: freeze the
 exception ordering and say which types are rethrown` is a finding. Three paragraphs of
 ordering is a specification — and Claude will paste it into the plan, because your `Fix:`

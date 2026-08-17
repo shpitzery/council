@@ -209,6 +209,7 @@ export function registerPlanTools(server, deps) {
             applied: resolution.applied,
             rejected: resolution.rejected,
             additional: resolution.additional,
+            deferred: resolution.deferred,
             needs_user_decision: resolution.needs_user,
             readiness: resolution.author_readiness,
           }
@@ -503,6 +504,15 @@ export function registerPlanTools(server, deps) {
           .max(LIMITS_PLAN.block)
           .optional()
           .describe("Additional Issues Integrated. 'None.' if there were none."),
+        deferred: z
+          .string()
+          .max(LIMITS_PLAN.block)
+          .optional()
+          .describe(
+            "Medium and Low findings left unapplied, by name. Required from round 3 when " +
+              "the critique carried any, because from there they no longer hold the plan " +
+              "back. Name any you applied anyway, and why it was worth the length.",
+          ),
         needs_user_decision: z
           .string()
           .max(LIMITS_PLAN.block)
@@ -533,8 +543,16 @@ export function registerPlanTools(server, deps) {
             );
           }
 
+          // The critique being answered, so the severity counts can be held against this
+          // resolve. It is this round's, not the latest: a decision hands the same round
+          // back to the author, who resolves again against the critique already on record.
+          const answering =
+            [...steps(goal_id)]
+              .reverse()
+              .find((s) => s.kind === "critique" && s.round === state.round) ?? null;
+
           const seq = appendPlanStep(db(), goal_id, {
-            ...validateResolve(fields, state.round),
+            ...validateResolve(fields, state.round, answering),
             ...planStats(council.plan_path),
           });
           sync(council);

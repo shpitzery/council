@@ -111,7 +111,7 @@ export function validateCritique(fields, council, round) {
   return clean;
 }
 
-export function validateResolve(fields, round) {
+export function validateResolve(fields, round, critique = null) {
   const clean = {
     kind: "resolve",
     actor: AUTHOR,
@@ -119,12 +119,36 @@ export function validateResolve(fields, round) {
     applied: requireText(fields.applied, "applied", LIMITS_PLAN.block),
     rejected: optionalText(fields.rejected, "rejected", LIMITS_PLAN.block),
     additional: optionalText(fields.additional, "additional", LIMITS_PLAN.block),
+    deferred: optionalText(fields.deferred, "deferred", LIMITS_PLAN.block),
     needs_user: optionalText(fields.needs_user_decision, "needs_user_decision", LIMITS_PLAN.block),
     author_readiness: fields.readiness,
   };
 
   if (!AUTHOR_READINESS.includes(clean.author_readiness)) {
     throw new ValidationError("readiness", `must be one of ${AUTHOR_READINESS.join(", ")}`);
+  }
+
+  // Once the gate is open, a Medium no longer holds the plan back — so a Medium applied
+  // here buys nothing and costs length. Five real rounds ended with 19 findings applied and
+  // none rejected, and the plan grew 154 lines to 332 while every warning about its size
+  // sat unread in the reply.
+  //
+  // The server cannot see which findings the author touched; the critique is one block of
+  // text and the severities are only counts. What it can do is refuse to let the
+  // non-blocking ones pass unmentioned, so folding a Medium in becomes a decision someone
+  // wrote down rather than the path of least resistance.
+  //
+  // This only ever fires on a mixed critique. A round at or past the gate with no Blocker
+  // and no High is already `ready` in planState, and never reaches a resolve at all.
+  const nonBlocking = (critique?.mediums ?? 0) + (critique?.lows ?? 0);
+  if (round >= SEVERITY_GATE_ROUND && nonBlocking > 0 && !clean.deferred) {
+    throw new ValidationError(
+      "deferred",
+      `round ${round} carried ${nonBlocking} Medium/Low finding(s), and from round ` +
+        `${SEVERITY_GATE_ROUND} those no longer hold the plan back. Say what you did with ` +
+        "them: defer them by name, or name the ones you applied anyway and why they were " +
+        "worth the length. Blockers and Highs are unaffected — fix those.",
+    );
   }
   // The resolver's own rule: READY requires no unresolved decision. Honouring it here is
   // what makes the hand-back to the user fall out rather than being bolted on.
@@ -226,6 +250,11 @@ export const RESOLVE_INSTRUCTION = [
   "decision recorded in a sentence. This loop only ever adds, over up to ten rounds, and a",
   "plan that grows a section per finding stops being something anyone can implement from.",
   "Watch plan_lines: if a round adds more than it changes, you are writing a specification.",
+  "",
+  `From round ${SEVERITY_GATE_ROUND} a Medium or Low no longer holds the plan back, so`,
+  "applying one buys nothing and costs length. Default to deferring them: fix the Blockers",
+  "and Highs, and list the rest in `deferred` by name. Applying one anyway is allowed — say",
+  "in `deferred` which, and why it was worth the lines.",
 ].join(" ");
 
 export const DECIDED_INSTRUCTION = [

@@ -98,6 +98,9 @@ with nothing open, it will sit there telling the user to run your window instead
 4. **`plan_council_resolve`** — submit those blocks. `applied` ← Plan Fixes Applied,
    `rejected` ← Critiques Rejected, `additional` ← Additional Issues Integrated,
    `needs_user_decision` ← Needs User Decision, `readiness` ← Implementation-Ready Decision.
+
+   **From round 3, `deferred` is required whenever the critique carried a Medium or Low.**
+   See below.
 5. Back to step 2 for the next round.
 
 Every reply carries `next_step` and, when it is your move, `instruction`. Follow them.
@@ -159,8 +162,24 @@ inside an automated loop.
 When they answer, call **`plan_council_resume`** with what they said. The same round comes
 back to you: apply their decision with the resolver, then `plan_council_resolve` again.
 
+**Past round 2, default to deferring Mediums and Lows.** From round 3 they no longer hold
+the plan back, so applying one buys no readiness and costs length. Fix the Blockers and
+Highs; list the rest in `deferred` by name. The server refuses a resolve that leaves them
+unmentioned.
+
+Applying one anyway is allowed — say in `deferred` which, and why it was worth the lines. A
+one-word correction usually is. A new subsection usually is not.
+
+This exists because of a measurement, not a preference: a real five-round council applied 19
+findings, rejected none, and grew the plan from 154 lines to 332. Every warning about its
+size was already in front of both models the whole time.
+
 **A rejection needs its reason.** The resolver already produces one for every critique it
 rejects. Carry it across. "Rejected" with no reason is how a real Blocker gets lost.
+
+`rejected` and `deferred` are different answers. Rejected means the finding is wrong, and
+needs the reason it is wrong. Deferred means it is right and not worth the plan's length
+right now — no argument required, just the name.
 
 **Do not report `READY` to be finished.** Your readiness is recorded, but it is not the stop
 signal — Codex's is. Reporting READY over a Blocker you did not fix just puts a false claim

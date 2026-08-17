@@ -256,6 +256,103 @@ describe("the severity gate after round 2", () => {
   });
 });
 
+// The ratchet. A real five-round council applied 19 findings and rejected none, and the
+// plan grew from 154 lines to 332 — because applying a finding means adding text, and
+// nothing in the loop ever takes any out. Past the gate a Medium buys no readiness, so
+// the length it costs is pure loss.
+describe("Medium and Low findings past the severity gate", () => {
+  let root, claude, codex, goalId;
+
+  // A Blocker keeps the council alive past the gate; the Mediums ride along with it. This
+  // mixed shape is the only one the rule ever sees — a gate-round critique with no Blocker
+  // and no High is already `ready`, and never reaches a resolve.
+  const mixed = critique({
+    critique:
+      "**Needs Fix**\n- [Blocker] The migration has no rollback. Fix: add one.\n" +
+      "- [Medium] The error message could name the field.\n" +
+      "- [Low] Two headings disagree on tense.",
+    blockers: 1,
+    mediums: 1,
+    lows: 1,
+  });
+
+  /** One full round on a Blocker-only critique, which needs no account of anything. */
+  const advance = async () => {
+    await call(codex, "plan_council_critique", { goal_id: goalId, agent: "codex", ...critique() });
+    await call(claude, "plan_council_resolve", {
+      goal_id: goalId,
+      agent: "claude",
+      ...resolution(),
+    });
+  };
+
+  before(async () => {
+    root = makeRoot("plan-deferred");
+    claude = await connect("claude", root);
+    codex = await connect("codex", root);
+    goalId = (await open(claude, "claude")).payload.goal_id;
+    await open(codex, "codex");
+  });
+
+  after(async () => {
+    await claude?.close();
+    await codex?.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("rounds 1 and 2 take a resolve with no account of them", async () => {
+    await call(codex, "plan_council_critique", { goal_id: goalId, agent: "codex", ...mixed });
+    const { payload, isError } = await call(claude, "plan_council_resolve", {
+      goal_id: goalId,
+      agent: "claude",
+      ...resolution(),
+    });
+    assert.equal(isError, false);
+    assert.equal(payload.round, 2);
+  });
+
+  test("from round 3 a resolve that ignores them is refused", async () => {
+    await advance();
+    await call(codex, "plan_council_critique", { goal_id: goalId, agent: "codex", ...mixed });
+
+    const refused = await call(claude, "plan_council_resolve", {
+      goal_id: goalId,
+      agent: "claude",
+      ...resolution(),
+    });
+    assert.equal(refused.isError, true);
+    assert.match(refused.payload.error, /deferred/);
+    assert.match(refused.payload.error, /2 Medium\/Low finding/);
+  });
+
+  test("deferring them by name is accepted, and reaches the record", async () => {
+    const { payload, isError } = await call(claude, "plan_council_resolve", {
+      goal_id: goalId,
+      agent: "claude",
+      ...resolution({
+        deferred: "M1 (error wording) and L1 (heading tense) both deferred — neither blocks.",
+      }),
+    });
+    assert.equal(isError, false);
+    assert.equal(payload.round, 4);
+
+    const step = readFileSync(join(root, goalId, "r3-resolve-6.md"), "utf8");
+    assert.match(step, /Medium\/Low findings deferred/);
+    assert.match(step, /heading tense/);
+  });
+
+  test("a critique with no Medium or Low needs no account of them", async () => {
+    await call(codex, "plan_council_critique", { goal_id: goalId, agent: "codex", ...critique() });
+    const { payload, isError } = await call(claude, "plan_council_resolve", {
+      goal_id: goalId,
+      agent: "claude",
+      ...resolution(),
+    });
+    assert.equal(isError, false);
+    assert.equal(payload.round, 5);
+  });
+});
+
 describe("a decision that is the user's to make", () => {
   let root, claude, codex, goalId;
 

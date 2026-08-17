@@ -122,6 +122,7 @@ const SCHEMA = [
      applied          TEXT,
      rejected         TEXT,
      additional       TEXT,
+     deferred         TEXT,
      needs_user       TEXT,
      author_readiness TEXT,
      decision         TEXT,
@@ -200,6 +201,7 @@ const SCHEMA = [
 const MIGRATIONS = [
   ["plan_steps", "plan_digest", "TEXT"],
   ["plan_steps", "plan_lines", "INTEGER"],
+  ["plan_steps", "deferred", "TEXT"],
 ];
 
 // Column defaults that moved after a table shipped. Same cause as MIGRATIONS — the CREATE
@@ -594,9 +596,9 @@ export function appendPlanStep(db, goalId, step) {
   db.prepare(
     `INSERT INTO plan_steps
        (goal_id, seq, round, kind, actor, critique, blockers, highs, mediums, lows,
-        critic_readiness, applied, rejected, additional, needs_user, author_readiness,
-        decision, plan_digest, plan_lines, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        critic_readiness, applied, rejected, additional, deferred, needs_user,
+        author_readiness, decision, plan_digest, plan_lines, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     goalId,
     seq,
@@ -612,6 +614,7 @@ export function appendPlanStep(db, goalId, step) {
     step.applied ?? null,
     step.rejected ?? null,
     step.additional ?? null,
+    step.deferred ?? null,
     step.needs_user ?? null,
     step.author_readiness ?? null,
     step.decision ?? null,
