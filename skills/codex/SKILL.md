@@ -1,6 +1,6 @@
 ---
 name: council
-description: Use when the user wants a second model to check, challenge, or help decide something — "ask claude", "get a second opinion", "have them argue this out", "/council". Runs bounded critique rounds between this session and a Claude session, each keeping its own context, and returns a verdict with the disagreements intact.
+description: Only when the user explicitly types /council in this window. Do NOT trigger on a general request for a second opinion, a review, or "what would claude say" — this is one half of a two-window loop, and unlike the other two modes you CAN open one here, so a wrong guess creates a real council that blocks every mode until someone abandons it.
 ---
 
 # Council
@@ -10,6 +10,17 @@ bounded number of rounds. Both of you already hold context the other lacks. The 
 not to agree — it is to surface where you disagree and why.
 
 The user runs this skill in both windows. You are one participant, not the chairman.
+
+## Before anything else
+
+**Did the user type `/council` in this window?** If not, stop and say so — then do the work
+they actually asked for.
+
+This skill is half of a loop across two windows, and the user starts each half by hand. A
+request to get a second opinion, review something, or say what Claude would think is not a
+request for it: answer it yourself. Reaching for this skill on that phrasing costs the user
+a wrong turn and, here alone, opens a real council that blocks every mode until someone
+abandons it — the other two modes refuse to let you start one, this one does not.
 
 ## The loop
 

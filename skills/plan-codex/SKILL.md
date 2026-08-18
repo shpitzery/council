@@ -1,6 +1,6 @@
 ---
 name: plan-council
-description: Use when the user wants you to critique an implementation plan that Claude wrote, round after round until it is ready to build — "review claude's plan", "run the plan council", "/plan-council". Automates the critique loop against a Claude session; the council stops when you report the plan implementation-ready.
+description: Only when the user explicitly types /plan-council in this window, after Claude has told them to start you. Do NOT trigger on a general request to review, critique, or check a plan — that is ordinary work, and critique-plan is the skill for it. This is one half of a two-window loop that Claude must open first.
 ---
 
 # Plan council
@@ -16,6 +16,16 @@ models say about themselves; this one is a verdict from the side whose job is to
 That only holds if your verdict is honest.
 
 The user runs this skill in both windows.
+
+## Before anything else
+
+**Did the user type `/plan-council` in this window?** If not, stop and say so — then do the
+work they actually asked for.
+
+This skill is half of a loop across two windows, and the user starts each half by hand. A
+request to review, critique, or check a plan is not a request for it: that is what your
+`critique-plan` skill is for, on its own. Reaching for this skill on that phrasing costs the
+user a wrong turn.
 
 ## The loop
 
