@@ -66,6 +66,19 @@ If nothing is open, you will be told the question is required; then ask.
    council Codex opened, the cap is theirs — say the number anyway.
 2. **`council_submit`** — your answer. On round 1 you have not seen Codex's answer and must
    not guess at it.
+
+   **Write to the caps the first time.** The server rejects an oversized field outright and
+   the whole call is lost, composing included:
+
+   | Field | Cap |
+   | --- | --- |
+   | `position` | 300 characters — one sentence carrying the claim, nothing else |
+   | `reasoning` | 4 entries, 2000 characters each |
+   | `evidence` | 6 entries, 2000 characters each |
+   | `disagreement`, `settling_test` | 2000 characters |
+
+   `position` is the claim; the argument goes in `reasoning`. If four reasons or six pieces
+   of evidence will not hold what you have, that is a signal to cut, not to retry.
 3. **`council_await_peer`** — blocks until Codex answers, then returns it. If the reply has
    `retry: true`, call it again. This is the only way to read Codex.
 4. Read their answer. Go back to step 2 for the next round.

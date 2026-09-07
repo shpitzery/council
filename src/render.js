@@ -256,10 +256,15 @@ const planStepLines = (step) => {
       `### Round ${step.round} — critique by ${step.actor}`,
       "",
       `Findings: ${step.blockers} Blocker, ${step.highs} High, ${step.mediums} Medium, ` +
-        `${step.lows} Low. Readiness: **${step.critic_readiness}**.`,
+        `${step.lows} Low` +
+        ((step.decisions ?? 0) > 0 ? ` — ${step.decisions} of them the user's to decide` : "") +
+        `. Readiness: **${step.critic_readiness}**.`,
       "",
       step.critique,
       "",
+      ...((step.decisions ?? 0) > 0
+        ? ["**Decisions for the user**", "", step.decision_list ?? "", ""]
+        : []),
     ];
   }
   if (step.kind === "decision") {

@@ -174,6 +174,14 @@ stops being reviewed. Show the user and let them rule.
 before implementing and to push back with technical reasoning. Carry that reasoning into
 `rejected` — a review point dropped silently is how a real Blocker gets lost.
 
+**Say how many of a round's findings are regressions from your own last round.** A finding
+against the work is the loop working; a finding against last round's repair is the loop
+feeding itself. One real council's round-4 `applied` block reads "Both held; I am rejecting
+neither. Both were defects I introduced in round 3", and the same run recorded the same weak
+assertion three rounds running — "the third instance of 'the haystack already holds the
+needle' in three rounds". Two rounds running where every finding is a regression: say so and
+ask the user whether to carry on.
+
 ## Waiting
 
 **Keep calling `impl_council_await` while it answers `retry: true`.** Each call returns after

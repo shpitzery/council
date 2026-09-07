@@ -119,6 +119,8 @@ const SCHEMA = [
      mediums          INTEGER,
      lows             INTEGER,
      critic_readiness TEXT,
+     decisions        INTEGER,
+     decision_list    TEXT,
      applied          TEXT,
      rejected         TEXT,
      additional       TEXT,
@@ -202,6 +204,8 @@ const MIGRATIONS = [
   ["plan_steps", "plan_digest", "TEXT"],
   ["plan_steps", "plan_lines", "INTEGER"],
   ["plan_steps", "deferred", "TEXT"],
+  ["plan_steps", "decisions", "INTEGER"],
+  ["plan_steps", "decision_list", "TEXT"],
 ];
 
 // Column defaults that moved after a table shipped. Same cause as MIGRATIONS — the CREATE
@@ -596,9 +600,10 @@ export function appendPlanStep(db, goalId, step) {
   db.prepare(
     `INSERT INTO plan_steps
        (goal_id, seq, round, kind, actor, critique, blockers, highs, mediums, lows,
-        critic_readiness, applied, rejected, additional, deferred, needs_user,
-        author_readiness, decision, plan_digest, plan_lines, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        critic_readiness, decisions, decision_list, applied, rejected, additional,
+        deferred, needs_user, author_readiness, decision, plan_digest, plan_lines,
+        created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     goalId,
     seq,
@@ -611,6 +616,8 @@ export function appendPlanStep(db, goalId, step) {
     step.mediums ?? null,
     step.lows ?? null,
     step.critic_readiness ?? null,
+    step.decisions ?? null,
+    step.decision_list ?? null,
     step.applied ?? null,
     step.rejected ?? null,
     step.additional ?? null,

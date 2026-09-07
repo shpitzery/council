@@ -82,6 +82,16 @@ against it; do not re-argue it. If a step genuinely cannot work as written, put 
 `plan_defect` — the council parks and the user rules. That is not a licence to reopen a
 settled plan because you would have written it differently.
 
+## Say when a finding is a regression
+
+You hold every round's diff; Claude is looking at the newest one. When a finding is a defect
+the last round's repair introduced, say so in the finding — *"new since round 3, introduced
+by the fix to High 1"*.
+
+A severity count cannot show the difference between work that is converging and work that is
+being churned, and that difference is what decides whether another round is worth running.
+One real council's round-4 findings were both defects its round-3 fixes had created.
+
 ## Read the rejections
 
 Claude rejects findings with reasons. If a reason is wrong, quote it in the next round. If it

@@ -353,6 +353,148 @@ describe("Medium and Low findings past the severity gate", () => {
   });
 });
 
+// The failure this exists for: a six-round, sixty-five-minute council on a plan whose round-1
+// critique carried 1 Blocker and 8 Highs, four of which were unmade design decisions rather
+// than defects. The author guessed at all four, and every guess produced the next round's
+// findings. Severity says how bad; it never said whose problem it was.
+describe("findings that are the user's to decide, not the author's to fix", () => {
+  let root, claude, codex, goalId;
+
+  const withDecisions = (over = {}) =>
+    critique({
+      critique:
+        "**Needs Fix**\n- [Blocker] Step 3 runs before Step 2 commits. Fix: reorder.\n" +
+        "- [High] The plan never says which statistic the 5% win uses.",
+      blockers: 1,
+      highs: 1,
+      decisions: 1,
+      decision_list:
+        "1. Which statistic decides the 5% win — the median across runs, or a confidence " +
+        "bound against pre_accel_fp8? Both are defensible; the plan assumes neither.",
+      ...over,
+    });
+
+  before(async () => {
+    root = makeRoot("plan-decisions");
+    claude = await connect("claude", root);
+    codex = await connect("codex", root);
+    goalId = (await open(claude, "claude")).payload.goal_id;
+    await open(codex, "codex");
+  });
+
+  after(async () => {
+    await claude?.close();
+    await codex?.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("a decision parks the council instead of handing the round to the author", async () => {
+    const { payload } = await call(codex, "plan_council_critique", {
+      goal_id: goalId,
+      agent: "codex",
+      ...withDecisions(),
+    });
+    assert.equal(payload.phase, "user");
+    assert.equal(payload.status, "needs_user");
+    assert.match(payload.stop_reason, /1 decision\(s\) that are the user's to make/);
+    assert.equal(payload.latest_critique.decisions, 1);
+    assert.match(payload.latest_critique.decision_list, /confidence bound/);
+  });
+
+  test("the author is told to show the questions, not answer them", async () => {
+    const { payload } = await call(claude, "plan_council_await", {
+      goal_id: goalId,
+      agent: "claude",
+    });
+    assert.equal(payload.retry, false);
+    assert.match(payload.next_step, /answer none of them yourself/);
+    assert.match(payload.next_step, /decision_list/);
+  });
+
+  test("resuming hands the same round back to the author", async () => {
+    const { payload } = await call(claude, "plan_council_resume", {
+      goal_id: goalId,
+      agent: "claude",
+      decision: "Use a confidence bound against pre_accel_fp8. The median is not enough.",
+    });
+    assert.equal(payload.phase, "resolve");
+    assert.equal(payload.next_actor, "claude");
+    assert.equal(payload.round, 1);
+
+    const step = readFileSync(join(root, goalId, "r1-critique-1.md"), "utf8");
+    assert.match(step, /1 of them the user's to decide/);
+    assert.match(step, /Decisions for the user/);
+  });
+
+});
+
+// The rules that keep `decisions` from becoming a way to hand back work rather than a way to
+// route it. Its own council, because these fire on the critic's turn.
+describe("what the server refuses to accept as a decision", () => {
+  let root, claude, codex, goalId;
+
+  before(async () => {
+    root = makeRoot("plan-decision-rules");
+    claude = await connect("claude", root);
+    codex = await connect("codex", root);
+    goalId = (await open(claude, "claude")).payload.goal_id;
+    await open(codex, "codex");
+  });
+
+  after(async () => {
+    await claude?.close();
+    await codex?.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("a count with no questions written down is refused", async () => {
+    const { payload, isError } = await call(codex, "plan_council_critique", {
+      goal_id: goalId,
+      agent: "codex",
+      ...critique({ decisions: 1 }),
+    });
+    assert.equal(isError, true);
+    assert.match(payload.error, /none written down/);
+  });
+
+  test("questions with no count are refused", async () => {
+    const { payload, isError } = await call(codex, "plan_council_critique", {
+      goal_id: goalId,
+      agent: "codex",
+      ...critique({ decision_list: "Median or confidence bound?" }),
+    });
+    assert.equal(isError, true);
+    assert.match(payload.error, /decisions is 0/);
+  });
+
+  test("more decisions than blocking findings is refused", async () => {
+    const { payload, isError } = await call(codex, "plan_council_critique", {
+      goal_id: goalId,
+      agent: "codex",
+      ...critique({ blockers: 1, highs: 0, decisions: 3, decision_list: "a? b? c?" }),
+    });
+    assert.equal(isError, true);
+    assert.match(payload.error, /cannot exceed the 1 Blocker and High/);
+  });
+
+  // The severity gate retires Mediums; it must never retire a decision. Nothing the author
+  // can do makes an unmade decision go away, so it cannot age into readiness.
+  test("a decision outstanding is never ready, whatever the round", async () => {
+    const { payload } = await call(codex, "plan_council_critique", {
+      goal_id: goalId,
+      agent: "codex",
+      ...critique({
+        blockers: 0,
+        highs: 1,
+        decisions: 1,
+        decision_list: "Median across runs, or a confidence bound? Both are defensible.",
+      }),
+    });
+    assert.equal(payload.status, "needs_user");
+    assert.equal(payload.phase, "user");
+  });
+});
+
 describe("a decision that is the user's to make", () => {
   let root, claude, codex, goalId;
 

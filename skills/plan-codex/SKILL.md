@@ -41,7 +41,7 @@ user a wrong turn.
    `Readiness` line.
 3. **`plan_council_critique`** — submit that output. `critique` ← the findings in full,
    `blockers`/`highs`/`mediums`/`lows` ← how many of each severity, `readiness` ← the
-   Readiness line.
+   Readiness line, and `decisions`/`decision_list` ← the split below.
 4. **`plan_council_await`** — blocks until Claude's resolution lands. **`retry: true` means
    call it again, and keep calling** while it says so. Each call returns after about 50
    seconds; that is the tool's limit, not a verdict about Claude. The server ends the wait
@@ -75,10 +75,42 @@ exception ordering and say which types are rethrown` is a finding. Three paragra
 ordering is a specification — and Claude will paste it into the plan, because your `Fix:`
 clause reads as the change to make. Ten rounds of that turn a plan into a document nobody
 can implement from. Watch `plan_lines` in the reply: you are reviewing a plan, and if it is
-swelling every round, say so in the critique.
+swelling every round, say so — **in the `Readiness` line, not as a Medium finding.** From
+round 3 a Medium is deferred by rule, so length filed at that severity is guaranteed to be
+read and dropped. One real council filed it three rounds running as a Medium while the plan
+went 593 → 624 → 706 lines.
+
+**Say when a finding is a regression from the last round's fix.** You are the only one
+holding both versions. "New since round 5, introduced by the fix to High 2" turns a count
+into something Claude can act on; without it, four findings look the same whether the plan is
+converging or being churned. One nine-round council spent rounds 6, 7 and 8 entirely on
+defects the previous round's repairs had introduced.
 
 The server rejects `Ready` while you report Blocker or High findings — but it cannot tell
 whether a Blocker was quietly filed as Medium instead. That part is yours.
+
+## Defects and decisions
+
+`critique-plan` splits your Blocker and High findings two ways. Carry that split here:
+`decisions` is how many of them are decisions, and `decision_list` is those questions with
+their options, written for the user to answer.
+
+**Anything above zero parks the council.** The round stops, Claude shows the user your
+questions, and nothing moves until they answer. That is the point — a decision is not work
+Claude can do, and a council that lets the author guess at one spends its rounds designing
+the plan instead of checking it. One real council spent six rounds and an hour that way: four
+of its nine round-1 findings were unmade decisions, the author guessed at all four, and every
+guess produced the next round's findings.
+
+**It is not a way to hand back work you would rather not think about.** The test from
+`critique-plan` holds here: if you cannot name two options you would defend, it is a defect
+with one right answer and the author should fix it.
+
+Only Blocker and High findings count. A Medium decision belongs in the critique text, and the
+server rejects a `decisions` count larger than the blocking findings it is drawn from.
+
+**Ready is impossible while a decision stands** — the server enforces it, and the severity
+gate does not retire one. Nothing Claude does makes an unmade decision go away.
 
 **Read the rejections.** Claude rejects critique points with reasons. If a reason is wrong,
 say so in the next round's critique and quote it. If it is right, drop the point — repeating

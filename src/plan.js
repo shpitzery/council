@@ -200,6 +200,8 @@ export function registerPlanTools(server, deps) {
             highs: critique.highs,
             mediums: critique.mediums,
             lows: critique.lows,
+            decisions: critique.decisions ?? 0,
+            decision_list: critique.decision_list ?? null,
             readiness: critique.critic_readiness,
           }
         : null,
@@ -226,6 +228,17 @@ export function registerPlanTools(server, deps) {
         : "The council has stopped. Call plan_council_close and show the user why.";
     }
     if (state.phase === "user") {
+      const trail = steps(council.goal_id);
+      const last = trail.length ? trail[trail.length - 1] : null;
+      if (last?.kind === "critique" && (last.decisions ?? 0) > 0) {
+        return (
+          `Stop and hand back to the user: the critic found ${last.decisions} decision(s) ` +
+          "that are theirs to make, in latest_critique.decision_list. Show them the " +
+          "questions and answer none of them yourself — guessing one is how a council " +
+          "spends its rounds designing the plan instead of checking it. When they answer, " +
+          "call plan_council_resume."
+        );
+      }
       return (
         "Stop and hand back to the user: the decision in latest_resolution.needs_user_decision " +
         "is theirs to make, not yours to guess. When they answer, call plan_council_resume."
@@ -434,6 +447,24 @@ export function registerPlanTools(server, deps) {
         highs: z.number().int().min(0).describe("How many High findings."),
         mediums: z.number().int().min(0).describe("How many Medium findings."),
         lows: z.number().int().min(0).describe("How many Low findings."),
+        decisions: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe(
+            "How many of the Blocker and High findings are decisions rather than defects — " +
+              "the plan does not say, and two or more answers are defensible. Anything above " +
+              "zero parks the council and hands those questions to the user. Default 0.",
+          ),
+        decision_list: z
+          .string()
+          .max(LIMITS_PLAN.block)
+          .optional()
+          .describe(
+            "Each decision as a question with its defensible options. Required when " +
+              "decisions is above zero; this exact text is what the user is asked.",
+          ),
         readiness: z
           .enum(CRITIC_READINESS)
           .describe("The skill's Readiness line. Ready ends the council."),
