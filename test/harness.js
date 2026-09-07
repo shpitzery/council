@@ -18,7 +18,7 @@ export function makeRoot(name) {
   return root;
 }
 
-export async function connect(agent, root) {
+export async function connect(agent, root, env = {}) {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [serverPath],
@@ -30,7 +30,11 @@ export async function connect(agent, root) {
       COUNCIL_TOTAL_WAIT_MS: process.env.COUNCIL_TOTAL_WAIT_MS ?? "300000",
       COUNCIL_PLAN_JOIN_WAIT_MS: process.env.COUNCIL_PLAN_JOIN_WAIT_MS ?? "300000",
       COUNCIL_PLAN_STEP_WAIT_MS: process.env.COUNCIL_PLAN_STEP_WAIT_MS ?? "1800000",
+      COUNCIL_IMPL_JOIN_WAIT_MS: process.env.COUNCIL_IMPL_JOIN_WAIT_MS ?? "300000",
+      COUNCIL_IMPL_STEP_WAIT_MS: process.env.COUNCIL_IMPL_STEP_WAIT_MS ?? "14400000",
       COUNCIL_STALE_AFTER_MS: process.env.COUNCIL_STALE_AFTER_MS ?? "900000",
+      // Per-test overrides win, so a case can pick a budget without touching the rest.
+      ...env,
     },
     stderr: "pipe",
   });

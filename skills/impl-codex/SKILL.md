@@ -34,7 +34,9 @@ on that phrasing costs the user a wrong turn.
 
 2. **`impl_council_await`** — until Claude's report lands. **`retry: true` means call again,
    and keep calling.** Claude may be writing code for a long time before the first report;
-   that is the work, not a stall. `peer_joined` tells you whether it is there at all.
+   that is the work, not a stall. The server allows four hours before it calls a peer gone —
+   sized for writing code, not for reading a diff — so a long silence here is normal and not
+   yours to interpret. `peer_joined` tells you whether it is there at all.
 
 3. **Run your `verify-implementation` skill** against the recorded `base_ref`, the
    `plan_path` and the `plan_scope` in the reply. It carries the method: completeness first,

@@ -69,9 +69,10 @@ differs from the other two on purpose:
 
 - Codex has nothing to verify until the report and the diff exist. Started earlier it only
   waits.
-- Waiting costs it. Codex's thirty-minute budget runs from the last thing that happened, and
-  its own join counts as one. Bring it in before you start coding and the clock is running
-  while you write; a change that takes forty minutes times its wait out for no reason.
+- Waiting is cheap now, but not free. The wait runs from the last thing that happened in the
+  council, and a join counts as one. The budget here is four hours — long enough for the work
+  this mode exists for — so a long round is no longer the hazard it was. Still, a critic
+  brought in early only sits there.
 
 So: open, report what was `cleared`, then **do the work in silence**. Report. Then hand over.
 
@@ -186,8 +187,19 @@ ask the user whether to carry on.
 
 **Keep calling `impl_council_await` while it answers `retry: true`.** Each call returns after
 about 50 seconds; that is the tool's limit, not a verdict about Codex. Verifying a change
-against a real codebase takes many minutes — the server allows thirty and ends the wait
+against a real codebase takes many minutes — the server allows four hours and ends the wait
 itself.
+
+**Take the time the work needs.** A step in this mode is writing the code, and the budget is
+sized for that. Do not file a partial report to keep a clock alive: `impl_council_report` is
+*the* report for the round, Codex checks it against the real diff, and anything claimed and
+not done counts against you. Finish, then file.
+
+This paragraph exists because the opposite happened. A council inherited the plan council's
+thirty-minute budget by mistake, the author spent that long on seven fixes and thirteen
+mutations with nothing finished to file, and the server killed the council one second past
+the half hour — for doing exactly what the mode is for. The budget was the bug; the work was
+right.
 
 **Never say Codex is absent unless `peer_joined` is `false`.** That field distinguishes
 "still working" from "never triggered", which look identical from here.

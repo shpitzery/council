@@ -684,3 +684,50 @@ describe("verifying work that already exists", () => {
     assert.match(payload.error, /HEAD~1, a branch name, or a commit sha/);
   });
 });
+
+// A council died because the implementation council inherited the plan council's
+// thirty-minute step budget. There, a step is "read a plan and write a critique"; here it is
+// "write the code", which is the whole point of the mode. The author spent half an hour on
+// seven fixes, filed nothing because nothing was finished, and the server killed the council
+// thirty minutes and one second after the last review.
+describe("the author gets time to actually write the code", () => {
+  let root, claude, codex, goalId;
+
+  before(async () => {
+    root = makeRoot("impl-step-budget");
+    // A step budget far shorter than the wait, so a peer that never files times out inside
+    // the test rather than in four hours.
+    claude = await connect("claude", root, { COUNCIL_IMPL_STEP_WAIT_MS: "400" });
+    codex = await connect("codex", root, { COUNCIL_IMPL_STEP_WAIT_MS: "400" });
+  });
+
+  after(async () => {
+    await claude?.close();
+    await codex?.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("the impl council reports its own step budget, not the plan council's", async () => {
+    const opened = await call(claude, "impl_council_open", {
+      agent: "claude",
+      task: "a long change",
+      project_path: process.cwd(),
+    });
+    goalId = opened.payload.goal_id;
+    await call(codex, "impl_council_open", { agent: "codex" });
+
+    // The budget is honoured rather than the plan council's 30 minutes: with it set to
+    // 400ms the wait gives up almost at once instead of running for half an hour.
+    const started = Date.now();
+    let last;
+    for (let i = 0; i < 8; i += 1) {
+      last = await call(codex, "impl_council_await", { goal_id: goalId, agent: "codex" });
+      if (last.payload.retry === false) break;
+    }
+    assert.equal(last.payload.retry, false, "the wait ended on the configured budget");
+    assert.ok(
+      Date.now() - started < 30 * 60_000,
+      "it did not fall back to the plan council's thirty minutes",
+    );
+  });
+});

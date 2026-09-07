@@ -94,6 +94,24 @@ const TOTAL_WAIT_MS = num("COUNCIL_TOTAL_WAIT_MS", 5 * 60_000);
 const PLAN_JOIN_WAIT_MS = num("COUNCIL_PLAN_JOIN_WAIT_MS", 5 * 60_000);
 const PLAN_STEP_WAIT_MS = num("COUNCIL_PLAN_STEP_WAIT_MS", 30 * 60_000);
 
+// The implementation council needs its own numbers, and inheriting the plan council's cost a
+// real run. A step there is "read a plan and write a critique" — thirty minutes is generous.
+// A step *here* is "write the code", which is the entire reason the mode exists.
+//
+// A council died on exactly that. Round 1's review landed at 17:06; the author spent the next
+// half hour on seven fixes and thirteen mutations, filed nothing because there was nothing
+// finished to file, and the server killed the council at 17:36:38 — thirty minutes and one
+// second later. It was punished for doing the work.
+//
+// Four hours, from the measured shape of fifteen real councils: author steps run one to
+// eleven minutes normally, the longest honest one on record is twenty-six, and the round that
+// died needed more than thirty. The tail is where the large rounds live, and the large rounds
+// are the ones worth waiting for. Detecting a genuinely dead peer four hours late costs
+// little — the join wait below still catches "never triggered" in five minutes, which is the
+// failure that actually happens.
+const IMPL_JOIN_WAIT_MS = num("COUNCIL_IMPL_JOIN_WAIT_MS", 5 * 60_000);
+const IMPL_STEP_WAIT_MS = num("COUNCIL_IMPL_STEP_WAIT_MS", 4 * 60 * 60_000);
+
 // How long a council must sit untouched before starting a new plan council may clear it.
 // Below this it is treated as possibly live and still blocks, because the peer may be
 // mid-turn in the other window.
@@ -1000,8 +1018,8 @@ registerImplTools(server, {
   log,
   pollBudgetMs: POLL_BUDGET_MS,
   pollIntervalMs: POLL_INTERVAL_MS,
-  joinWaitMs: PLAN_JOIN_WAIT_MS,
-  stepWaitMs: PLAN_STEP_WAIT_MS,
+  joinWaitMs: IMPL_JOIN_WAIT_MS,
+  stepWaitMs: IMPL_STEP_WAIT_MS,
   staleAfterMs: STALE_AFTER_MS,
   unfinishedElsewhere,
   sweepStale,
