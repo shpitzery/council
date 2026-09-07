@@ -65,6 +65,9 @@ function requireCount(value, field) {
 
 /** Is this critique a green light, given which round it landed in? */
 export function criticSaysReady(step) {
+  // An unmade decision is not a defect the author can fix, so no amount of rounds retires
+  // it. Readiness cannot be reported over one, whichever way the critic worded the line.
+  if ((step.decisions ?? 0) > 0) return { ready: false };
   if (step.critic_readiness === "Ready") return { ready: true, reason: "the critic reported Ready" };
   if (
     step.round >= SEVERITY_GATE_ROUND &&
@@ -92,8 +95,40 @@ export function validateCritique(fields, council, round) {
     highs: requireCount(fields.highs, "highs"),
     mediums: requireCount(fields.mediums, "mediums"),
     lows: requireCount(fields.lows, "lows"),
+    // How many of those blocking findings are unmade decisions rather than defects.
+    decisions: requireCount(fields.decisions ?? 0, "decisions"),
+    decision_list: optionalText(fields.decision_list, "decision_list", LIMITS_PLAN.block),
     critic_readiness: fields.readiness,
   };
+
+  // A decision is a subset of the blocking findings, never an extra pile beside them. The
+  // count exists so the server can route them; it cannot route what it cannot see inside
+  // the blocking set.
+  if (clean.decisions > clean.blockers + clean.highs) {
+    throw new ValidationError(
+      "decisions",
+      `${clean.decisions} decisions cannot exceed the ${clean.blockers + clean.highs} ` +
+        "Blocker and High findings they are drawn from. Only Blocker and High findings " +
+        "are counted here; a Medium decision belongs in the critique text alone.",
+    );
+  }
+
+  // The whole point is to hand the user something answerable. A count with no questions
+  // parks the council on nothing.
+  if (clean.decisions > 0 && !clean.decision_list) {
+    throw new ValidationError(
+      "decision_list",
+      `${clean.decisions} decision(s) reported with none written down. List each one as a ` +
+        "question with the defensible options, because the council is about to park and " +
+        "hand exactly this text to the user.",
+    );
+  }
+  if (clean.decisions === 0 && clean.decision_list) {
+    throw new ValidationError(
+      "decisions",
+      "decision_list was given but decisions is 0. Count them, or leave the list empty.",
+    );
+  }
 
   if (!CRITIC_READINESS.includes(clean.critic_readiness)) {
     throw new ValidationError("readiness", `must be one of ${CRITIC_READINESS.join(", ")}`);
@@ -111,7 +146,7 @@ export function validateCritique(fields, council, round) {
   return clean;
 }
 
-export function validateResolve(fields, round) {
+export function validateResolve(fields, round, critique = null) {
   const clean = {
     kind: "resolve",
     actor: AUTHOR,
@@ -119,12 +154,36 @@ export function validateResolve(fields, round) {
     applied: requireText(fields.applied, "applied", LIMITS_PLAN.block),
     rejected: optionalText(fields.rejected, "rejected", LIMITS_PLAN.block),
     additional: optionalText(fields.additional, "additional", LIMITS_PLAN.block),
+    deferred: optionalText(fields.deferred, "deferred", LIMITS_PLAN.block),
     needs_user: optionalText(fields.needs_user_decision, "needs_user_decision", LIMITS_PLAN.block),
     author_readiness: fields.readiness,
   };
 
   if (!AUTHOR_READINESS.includes(clean.author_readiness)) {
     throw new ValidationError("readiness", `must be one of ${AUTHOR_READINESS.join(", ")}`);
+  }
+
+  // Once the gate is open, a Medium no longer holds the plan back — so a Medium applied
+  // here buys nothing and costs length. Five real rounds ended with 19 findings applied and
+  // none rejected, and the plan grew 154 lines to 332 while every warning about its size
+  // sat unread in the reply.
+  //
+  // The server cannot see which findings the author touched; the critique is one block of
+  // text and the severities are only counts. What it can do is refuse to let the
+  // non-blocking ones pass unmentioned, so folding a Medium in becomes a decision someone
+  // wrote down rather than the path of least resistance.
+  //
+  // This only ever fires on a mixed critique. A round at or past the gate with no Blocker
+  // and no High is already `ready` in planState, and never reaches a resolve at all.
+  const nonBlocking = (critique?.mediums ?? 0) + (critique?.lows ?? 0);
+  if (round >= SEVERITY_GATE_ROUND && nonBlocking > 0 && !clean.deferred) {
+    throw new ValidationError(
+      "deferred",
+      `round ${round} carried ${nonBlocking} Medium/Low finding(s), and from round ` +
+        `${SEVERITY_GATE_ROUND} those no longer hold the plan back. Say what you did with ` +
+        "them: defer them by name, or name the ones you applied anyway and why they were " +
+        "worth the length. Blockers and Highs are unaffected — fix those.",
+    );
   }
   // The resolver's own rule: READY requires no unresolved decision. Honouring it here is
   // what makes the hand-back to the user fall out rather than being bolted on.
@@ -156,6 +215,20 @@ export function planState(steps, maxRounds) {
   if (!last) return { phase: "critique", actor: CRITIC, round: 1 };
 
   if (last.kind === "critique") {
+    // Checked before readiness and before handing the round to the author. A decision is
+    // the user's to make, and the author resolving around it is how six rounds get spent
+    // designing a plan one guess at a time.
+    if ((last.decisions ?? 0) > 0) {
+      return {
+        phase: "user",
+        actor: null,
+        round: last.round,
+        status: "needs_user",
+        reason:
+          `the critic found ${last.decisions} decision(s) that are the user's to make, ` +
+          "not defects the author can fix",
+      };
+    }
     const verdict = criticSaysReady(last);
     if (verdict.ready) {
       return {
@@ -211,6 +284,19 @@ export const CRITIQUE_INSTRUCTION = [
   "exception ordering` is a finding. Three paragraphs of ordering is a specification, and the",
   "author will paste it into the plan — that is how a plan turns into a document nobody can",
   "implement from.",
+  "",
+  "Split your Blocker and High findings two ways, and put the second number in `decisions`.",
+  "A *defect* is where the plan contradicts itself, the code, or the task contract, or cannot",
+  "be executed as written — one right answer exists and the author can apply it. A *decision*",
+  "is where the plan does not say and two or more answers are defensible. The test is whether",
+  "you can name the options: if you cannot state two you would defend, it is a defect with one",
+  "right answer, not a decision.",
+  "",
+  "Anything above zero in `decisions` parks the council and hands `decision_list` to the user",
+  "verbatim, so write each one as a question with its options. This is not a way to hand back",
+  "work you would rather not think about — it is for the questions no edit to the plan can",
+  "settle. A council once spent six rounds and an hour watching the author guess at four of",
+  "them, and each guess produced the next round's findings.",
 ].join(" ");
 
 export const RESOLVE_INSTRUCTION = [
@@ -226,6 +312,11 @@ export const RESOLVE_INSTRUCTION = [
   "decision recorded in a sentence. This loop only ever adds, over up to ten rounds, and a",
   "plan that grows a section per finding stops being something anyone can implement from.",
   "Watch plan_lines: if a round adds more than it changes, you are writing a specification.",
+  "",
+  `From round ${SEVERITY_GATE_ROUND} a Medium or Low no longer holds the plan back, so`,
+  "applying one buys nothing and costs length. Default to deferring them: fix the Blockers",
+  "and Highs, and list the rest in `deferred` by name. Applying one anyway is allowed — say",
+  "in `deferred` which, and why it was worth the lines.",
 ].join(" ");
 
 export const DECIDED_INSTRUCTION = [

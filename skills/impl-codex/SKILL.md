@@ -1,6 +1,6 @@
 ---
 name: impl-council
-description: Use when the user wants you to verify code Claude just wrote — "check claude's implementation", "verify the changes", "/impl-council". You read the real diff, check it against the plan and scope, actually verify it, and report. The council stops when you approve.
+description: Only when the user explicitly types /impl-council in this window, after Claude has told them to start you. Do NOT trigger on a general request to verify, check, or review code, or on "is this done correctly" — that is ordinary work, and verify-implementation is the skill for it. This is one half of a two-window loop that Claude must open first.
 ---
 
 # Implementation council
@@ -13,6 +13,16 @@ your approval can be backed by something you ran. That is the whole value here, 
 holds if your verdict means what it says.
 
 The user runs this skill in both windows.
+
+## Before anything else
+
+**Did the user type `/impl-council` in this window?** If not, stop and say so — then do the
+work they actually asked for.
+
+This skill is half of a loop across two windows, and the user starts each half by hand. A
+request to verify, check, or review code, or confirm work is done is not a request for it:
+that is what your `verify-implementation` skill is for, on its own. Reaching for this skill
+on that phrasing costs the user a wrong turn.
 
 ## The loop
 
@@ -71,6 +81,16 @@ gates is not one sitting's work, and flagging the other six as missing buries th
 against it; do not re-argue it. If a step genuinely cannot work as written, put it in
 `plan_defect` — the council parks and the user rules. That is not a licence to reopen a
 settled plan because you would have written it differently.
+
+## Say when a finding is a regression
+
+You hold every round's diff; Claude is looking at the newest one. When a finding is a defect
+the last round's repair introduced, say so in the finding — *"new since round 3, introduced
+by the fix to High 1"*.
+
+A severity count cannot show the difference between work that is converging and work that is
+being churned, and that difference is what decides whether another round is worth running.
+One real council's round-4 findings were both defects its round-3 fixes had created.
 
 ## Read the rejections
 

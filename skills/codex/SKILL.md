@@ -1,6 +1,6 @@
 ---
 name: council
-description: Use when the user wants a second model to check, challenge, or help decide something — "ask claude", "get a second opinion", "have them argue this out", "/council". Runs bounded critique rounds between this session and a Claude session, each keeping its own context, and returns a verdict with the disagreements intact.
+description: Only when the user explicitly types /council in this window. Do NOT trigger on a general request for a second opinion, a review, or "what would claude say" — this is one half of a two-window loop, and unlike the other two modes you CAN open one here, so a wrong guess creates a real council that blocks every mode until someone abandons it.
 ---
 
 # Council
@@ -11,12 +11,36 @@ not to agree — it is to surface where you disagree and why.
 
 The user runs this skill in both windows. You are one participant, not the chairman.
 
+## Before anything else
+
+**Did the user type `/council` in this window?** If not, stop and say so — then do the work
+they actually asked for.
+
+This skill is half of a loop across two windows, and the user starts each half by hand. A
+request to get a second opinion, review something, or say what Claude would think is not a
+request for it: answer it yourself. Reaching for this skill on that phrasing costs the user
+a wrong turn and, here alone, opens a real council that blocks every mode until someone
+abandons it — the other two modes refuse to let you start one, this one does not.
+
 ## The loop
 
 1. **`council_open`** — `agent: "codex"`, plus `question` and `project_path` if you are
    first. If Claude already opened one, you join it automatically.
 2. **`council_submit`** — your answer. On round 1 you have not seen Claude's answer and must
    not guess at it.
+
+   **Write to the caps the first time.** The server rejects an oversized field outright and
+   the whole call is lost, composing included:
+
+   | Field | Cap |
+   | --- | --- |
+   | `position` | 300 characters — one sentence carrying the claim, nothing else |
+   | `reasoning` | 4 entries, 2000 characters each |
+   | `evidence` | 6 entries, 2000 characters each |
+   | `disagreement`, `settling_test` | 2000 characters |
+
+   `position` is the claim; the argument goes in `reasoning`. If four reasons or six pieces
+   of evidence will not hold what you have, that is a signal to cut, not to retry.
 3. **`council_await_peer`** — blocks until Claude answers, then returns it. If the reply has
    `retry: true`, call it again. This is the only way to read Claude.
 4. Read their answer. Go back to step 2 for the next round.

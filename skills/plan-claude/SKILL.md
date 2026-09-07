@@ -67,6 +67,16 @@ with nothing open, it will sit there telling the user to run your window instead
    now.` on its own line. That handoff is the point: they trigger the second window only once
    this one is ready for it.
 
+   **Report `max_rounds` in that opening line — `Cap: 10 rounds.`** It is the council's own
+   cap, fixed when it was opened, not whatever this skill file says today. A number the user
+   does not expect means the server process is running older code than the files on disk: it
+   loads once per window and never reloads, so a window left open across a change keeps the
+   old cap. Restarting this window is the fix, and it is worth doing before the rounds start
+   rather than discovering the cap from the outside when it fires.
+
+   A council carried over by `resuming` keeps the cap it was opened with, so restarting the
+   window will not raise it. Say the number either way.
+
    **If the reply carries `resuming`, stop there and ask.** A council on this plan already
    has work in it. Show the user the round, how old it is, what the waiting critique found,
    and whether `plan_changed_since_critique` is true — then ask: resume, or start over?
@@ -88,6 +98,9 @@ with nothing open, it will sit there telling the user to run your window instead
 4. **`plan_council_resolve`** — submit those blocks. `applied` ← Plan Fixes Applied,
    `rejected` ← Critiques Rejected, `additional` ← Additional Issues Integrated,
    `needs_user_decision` ← Needs User Decision, `readiness` ← Implementation-Ready Decision.
+
+   **From round 3, `deferred` is required whenever the critique carried a Medium or Low.**
+   See below.
 5. Back to step 2 for the next round.
 
 Every reply carries `next_step` and, when it is your move, `instruction`. Follow them.
@@ -135,8 +148,32 @@ it. "Exception order is frozen: bad_alloc rethrown first, then SchemaError → 4
 step. Three paragraphs of ordering is a specification that has wandered into one.
 
 **Every reply carries `plan_lines`, `plan_lines_added_last_step` and
-`plan_lines_added_total`.** Read them. If a round added more than it changed, say so to the
-user rather than carrying on — they may want to stop and prune before round 3 makes it worse.
+`plan_lines_added_total`.** Read them, and say the size to the user every round.
+
+**Past 1.3× the length the council opened with, stop and ask whether to prune before
+carrying on.** Across fourteen real councils the plan grew 1.54× on average and 2.64× at
+worst — and that worst one spent all ten rounds and was never signed off. Length and
+readiness pull against each other, and the cap is not a budget to spend.
+
+## When the loop starts eating its own fixes
+
+A finding against the plan you wrote is the loop working. A finding against the fix you made
+last round is the loop feeding itself.
+
+One real nine-round council recorded, in its own resolutions: round 6, "all four held, and
+all four were mine"; round 7, "three of them — the residual zeros, the metric direction, and
+the phantom `nsys launch` — were defects I introduced in rounds 5 and 6 while fixing earlier
+findings"; round 8, "both were mine — High 1 was a defect I introduced in round 7 while
+fixing the previous nsys finding". Every one of those critiques was correct. The plan had
+simply stopped being the thing under review.
+
+**Say the split every round** — *"four findings, three of them regressions from my round-5
+edit"*. It costs one line, and it is the only place the difference is visible.
+
+**Two rounds running where every finding is a regression from your own last round: say so and
+ask whether to carry on.** That council did converge in the end — round 9 reported Ready —
+but rounds 5 through 8 were repair on repair, and the user was never told that was what they
+were paying for.
 
 ## Rules the server cannot enforce
 
@@ -149,8 +186,41 @@ inside an automated loop.
 When they answer, call **`plan_council_resume`** with what they said. The same round comes
 back to you: apply their decision with the resolver, then `plan_council_resolve` again.
 
+**The critic can now park the council itself.** When its critique carries `decisions`, the
+council stops before the round reaches you: `phase` is `user`, and `latest_critique.decision_list`
+holds the questions. Show the user those questions as they were written and **answer none of
+them** — not the easy-looking one, not the one you think you know. Guessing is exactly what
+this rule exists to stop. Call `plan_council_resume` with their answer, and the same round
+comes back to you.
+
+This is the enforced version of the rule below, moved to the side that sees the finding first.
+The rule below still applies to anything you find yourself.
+
+**A finding whose fix is work only the user can do is a `needs_user_decision` the round it
+appears.** "Freeze the passing thresholds", "obtain owner sign-off", "decide whether this is
+in scope" — no edit to the plan settles any of those, and editing around them produces text
+the next critique correctly rejects. One real council was told in its round-4 critique that
+the owner had to freeze four inputs before an implementation plan could exist. It ran three
+more rounds first, and was abandoned on that same point.
+
+**Past round 2, default to deferring Mediums and Lows.** From round 3 they no longer hold
+the plan back, so applying one buys no readiness and costs length. Fix the Blockers and
+Highs; list the rest in `deferred` by name. The server refuses a resolve that leaves them
+unmentioned.
+
+Applying one anyway is allowed — say in `deferred` which, and why it was worth the lines. A
+one-word correction usually is. A new subsection usually is not.
+
+This exists because of a measurement, not a preference: a real five-round council applied 19
+findings, rejected none, and grew the plan from 154 lines to 332. Every warning about its
+size was already in front of both models the whole time.
+
 **A rejection needs its reason.** The resolver already produces one for every critique it
 rejects. Carry it across. "Rejected" with no reason is how a real Blocker gets lost.
+
+`rejected` and `deferred` are different answers. Rejected means the finding is wrong, and
+needs the reason it is wrong. Deferred means it is right and not worth the plan's length
+right now — no argument required, just the name.
 
 **Do not report `READY` to be finished.** Your readiness is recorded, but it is not the stop
 signal — Codex's is. Reporting READY over a Blocker you did not fix just puts a false claim
