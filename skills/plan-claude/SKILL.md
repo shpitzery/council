@@ -175,6 +175,25 @@ ask whether to carry on.** That council did converge in the end — round 9 repo
 but rounds 5 through 8 were repair on repair, and the user was never told that was what they
 were paying for.
 
+## The review point — round 3
+
+The council stops after round 3 and asks whether another three rounds are worth it. It is
+**not** the cap and nothing is wrong when it fires: the status is `needs_user`, the work is
+intact, and answering carries it on.
+
+Say it plainly when it happens. Give the user what they need to decide in three lines:
+
+- what the last round found, and whether those findings were new work or repairs of the
+  previous round's repairs
+- how much the plan has grown since round 1
+- what you would do — carry on, stop and take what is there, or hand it back
+
+**Recommend, do not decide.** Carrying on because the round cap allows it is exactly the
+habit this gate exists to break. Ten rounds was never a safety margin; it was permission.
+
+The next checkpoint moves out by three each time, so the answer is always "three more
+rounds", never "unlimited from here".
+
 ## Rules the server cannot enforce
 
 **Never guess at a `Needs User Decision`.** If the resolver raises one, put it in

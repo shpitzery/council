@@ -33,6 +33,60 @@ export const LIMITS_PLAN = {
 // never ends on its own and the round cap becomes the only exit.
 export const SEVERITY_GATE_ROUND = 3;
 
+// How many rounds run before the council stops and asks whether to carry on.
+//
+// Not a cap — a checkpoint the user owns. The cap is a wall the loop hits after spending
+// everything; this is a place it stops while there is still budget to spend, says what still
+// stands, and lets the user decide whether another round is worth it.
+//
+// Three, from three independent directions. GitHub's HydraFusion reaches within 0.1
+// percentage points of Opus 5 on CheckpointBench with *one* draft-critique-revise cycle at
+// 65% lower cost, and its Rubber Duck critic fires at chosen moments rather than on a
+// cadence. The findings here are front-loaded the same way: one real council went 3 High and
+// 4 gaps at round 1 to 1 High and 1 gap by round 3. And the rounds past that are where the
+// loop turns on itself — a nine-round council recorded rounds 6, 7 and 8 as entirely defects
+// its own earlier repairs had introduced.
+//
+// The cap was raised 4 to 5 to 10 because rounds kept being needed. That treated the
+// symptom: a high cap is not a safety margin, it is permission to keep going.
+export const REVIEW_EVERY = 3;
+
+/**
+ * The round this council next stops at to ask.
+ *
+ * Derived from the steps rather than stored, like every other piece of phase in this file.
+ * Each time the user says carry on, the next checkpoint moves another REVIEW_EVERY rounds
+ * out, so the answer is "three more rounds", never "unlimited from here".
+ *
+ * A checkpoint resume is told apart from a content decision by what it followed: a decision
+ * after a step that raised no question of its own is the user answering "carry on", and a
+ * decision after one that did is the user settling what was asked.
+ */
+export function reviewPointAt(steps) {
+  let resumed = 0;
+  for (let i = 0; i < steps.length; i += 1) {
+    if (steps[i].kind !== "decision") continue;
+    const prior = lastNonDecision(steps, i);
+    if (prior && !raisedAQuestion(prior)) resumed += 1;
+  }
+  return REVIEW_EVERY * (resumed + 1);
+}
+
+/** The nearest step before `index` that is not itself a decision. */
+export function lastNonDecision(steps, index) {
+  for (let i = index - 1; i >= 0; i -= 1) {
+    if (steps[i].kind !== "decision") return steps[i];
+  }
+  return null;
+}
+
+/** Did this step raise something the user had to answer? */
+function raisedAQuestion(step) {
+  if (step.kind === "resolve") return Boolean(step.needs_user);
+  if (step.kind === "critique") return (step.decisions ?? 0) > 0;
+  return false;
+}
+
 function requireText(value, field, max) {
   if (typeof value !== "string" || value.trim() === "") {
     throw new ValidationError(field, "must be a non-empty string");
@@ -263,12 +317,37 @@ export function planState(steps, maxRounds) {
           "The plan holds every fix applied so far; the last critique was answered.",
       };
     }
+    // The checkpoint. Rounds past this one are the ones that historically turn on
+    // themselves, so the council stops here with budget left and asks rather than spending
+    // it. Answering carries it another REVIEW_EVERY rounds; the cap above is still the wall.
+    const reviewAt = reviewPointAt(steps);
+    if (last.round >= reviewAt) {
+      return {
+        phase: "user",
+        actor: null,
+        round: last.round,
+        status: "needs_user",
+        reason:
+          `${last.round} rounds done — the review point. Nothing is wrong; this is where ` +
+          "the council asks whether another three rounds are worth it, rather than spending " +
+          "them and telling you afterwards.",
+      };
+    }
     return { phase: "critique", actor: CRITIC, round: last.round + 1 };
   }
 
-  // A decision hands the same round back to the author, who applies it and resolves again.
-  // The round does not advance: no new critique was consumed, and burning a round on the
-  // user's answer would spend a quarter of the budget on a hand-back.
+  // Where a decision hands the council depends on what it answered.
+  //
+  // A question raised by a step — the author's needs_user_decision, or the critic's
+  // decisions — comes back to the author to apply, in the same round. No new critique was
+  // consumed, and burning a round on a hand-back would spend part of the budget on it.
+  //
+  // A checkpoint answer is different: the round it paused was already finished, so carrying
+  // on means the next round's critique.
+  const prior = lastNonDecision(steps, steps.length - 1);
+  if (prior?.kind === "resolve" && !prior.needs_user) {
+    return { phase: "critique", actor: CRITIC, round: last.round + 1 };
+  }
   return { phase: "resolve", actor: AUTHOR, round: last.round };
 }
 

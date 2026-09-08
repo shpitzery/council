@@ -9,6 +9,7 @@
 // approval carries evidence, not an opinion.
 
 import { ValidationError } from "./rules.js";
+import { REVIEW_EVERY, reviewPointAt, lastNonDecision } from "./plan-rules.js";
 
 // Fixed, as in the plan council. Claude writes the code because Claude was asked to; Codex
 // verifies because a verdict from the side that did the work is worth nothing.
@@ -163,6 +164,18 @@ export function reviewApproves(step) {
   return { ready: true, reason: "the critic approved the implementation" };
 }
 
+// Gaps in the first review that mean the work was not finished when the council opened.
+//
+// This mode verifies work that is done. Opened on work that is not, it becomes a supervised
+// implementation session where every round costs the author a full test run and the critic
+// another one — one real council spent 208 minutes that way, and 4 of its round-1 findings
+// were gaps.
+//
+// Three, from the record. Of eighteen implementation councils, every one that opened with no
+// gaps or one reached `ready`; of the seven that opened with three or more, only three did —
+// the rest were aborted, capped, or errored. The line falls cleanly between one and three.
+export const UNFINISHED_GAPS = 3;
+
 /**
  * Whose move it is, given every step so far.
  * Returns { phase, actor, round, status, reason } where phase is
@@ -218,11 +231,44 @@ export function implState(steps, maxRounds) {
         reason: `the implementation is complete and verified — ${verdict.reason}`,
       };
     }
+    // Round 1 only. Later rounds close gaps as they go, and stopping on those would park a
+    // council that is doing exactly what it should.
+    if (last.round === 1 && (last.gaps ?? 0) >= UNFINISHED_GAPS) {
+      return {
+        phase: "user",
+        actor: null,
+        round: last.round,
+        status: "needs_user",
+        reason:
+          `the first review found ${last.gaps} item(s) in scope not implemented at all. ` +
+          "This mode verifies finished work; on unfinished work it turns into a supervised " +
+          "implementation session, at two full verification passes a round. Finish the work " +
+          "or narrow the scope, then carry on.",
+      };
+    }
+    const reviewAt = reviewPointAt(steps);
+    if (last.round >= reviewAt && last.round < maxRounds) {
+      return {
+        phase: "user",
+        actor: null,
+        round: last.round,
+        status: "needs_user",
+        reason:
+          `${last.round} rounds done — the review point. Nothing is wrong; this is where ` +
+          "the council asks whether another three rounds are worth it, rather than spending " +
+          "them and telling you afterwards.",
+      };
+    }
     return { phase: "report", actor: AUTHOR, round: last.round + 1 };
   }
 
-  // A decision hands the same round back to the author. The round does not advance: no new
-  // review was consumed, and burning one on a hand-back spends a fifth of the budget.
+  // Where a decision hands the council depends on what it answered. A question raised by a
+  // step comes back to the author in the same round — no new review was consumed. A review
+  // that raised none was a checkpoint or a gap gate, and carrying on means the next round.
+  const prior = lastNonDecision(steps, steps.length - 1);
+  if (prior?.kind === "review" && !prior.plan_defect) {
+    return { phase: "report", actor: AUTHOR, round: last.round + 1 };
+  }
   return { phase: "report", actor: AUTHOR, round: last.round };
 }
 

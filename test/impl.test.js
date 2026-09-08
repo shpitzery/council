@@ -731,3 +731,116 @@ describe("the author gets time to actually write the code", () => {
     );
   });
 });
+
+// Two gates that stop a council running when it should not have started, or running past the
+// point where its rounds still buy anything.
+describe("the gates that stop a council going nowhere", () => {
+  let root, repo, claude, codex;
+
+  before(async () => {
+    root = makeRoot("impl-gates");
+    repo = makeRepo("gates");
+    claude = await connect("claude", root);
+    codex = await connect("codex", root);
+  });
+
+  after(async () => {
+    await claude?.close();
+    await codex?.close();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  const openOne = async (task) => {
+    const opened = await call(claude, "impl_council_open", {
+      agent: "claude",
+      task,
+      project_path: repo,
+      plan_path: "/plan.md",
+      plan_scope: "all of it",
+    });
+    await call(codex, "impl_council_open", { agent: "codex" });
+    return opened.payload.goal_id;
+  };
+
+  // 208 minutes went this way: a council opened to verify work that was not finished, which
+  // turns verification into supervised implementation at two full test runs a round.
+  test("a first review full of gaps parks rather than starting round 2", async () => {
+    const goalId = await openOne("verify the thing is done");
+    await call(claude, "impl_council_report", { goal_id: goalId, agent: "claude", ...report() });
+    const { payload } = await call(codex, "impl_council_review", {
+      goal_id: goalId,
+      agent: "codex",
+      ...review({ gaps: 4, coverage: "Steps 2, 3, 5 and 6 are not implemented at all." }),
+    });
+
+    assert.equal(payload.phase, "user");
+    assert.equal(payload.status, "needs_user");
+    assert.match(payload.stop_reason, /4 item\(s\) in scope not implemented at all/);
+    assert.match(payload.stop_reason, /Finish the work or narrow the scope/);
+
+    // Answering carries it on into round 2 rather than repeating round 1.
+    const resumed = await call(claude, "impl_council_resume", {
+      goal_id: goalId,
+      agent: "claude",
+      decision: "Scope was too wide. Narrowed to Step 1 — carry on.",
+    });
+    assert.equal(resumed.payload.round, 2);
+    assert.equal(resumed.payload.phase, "report");
+    await call(claude, "council_abandon", { agent: "claude", reason: "cleanup" });
+  });
+
+  test("one gap is not enough to park — every council that opened there finished", async () => {
+    const goalId = await openOne("verify the other thing");
+    await call(claude, "impl_council_report", { goal_id: goalId, agent: "claude", ...report() });
+    const { payload } = await call(codex, "impl_council_review", {
+      goal_id: goalId,
+      agent: "codex",
+      ...review({ gaps: 1, coverage: "Step 4's logging is partial." }),
+    });
+    assert.equal(payload.status, "active");
+    assert.equal(payload.round, 2);
+    await call(claude, "council_abandon", { agent: "claude", reason: "cleanup" });
+  });
+
+  test("three rounds in, the council asks before spending three more", async () => {
+    const goalId = await openOne("a change that needs a few rounds");
+    for (let round = 1; round <= 3; round += 1) {
+      await call(claude, "impl_council_report", { goal_id: goalId, agent: "claude", ...report() });
+      const { payload } = await call(codex, "impl_council_review", {
+        goal_id: goalId,
+        agent: "codex",
+        ...review(),
+      });
+      if (round < 3) {
+        assert.equal(payload.status, "active", `round ${round} should carry on`);
+        assert.equal(payload.round, round + 1);
+      } else {
+        assert.equal(payload.status, "needs_user", "round 3 is the review point");
+        assert.match(payload.stop_reason, /3 rounds done — the review point/);
+        assert.match(payload.stop_reason, /whether another three rounds are worth it/);
+      }
+    }
+
+    // Carrying on moves the next checkpoint out by three, not to unlimited.
+    await call(claude, "impl_council_resume", {
+      goal_id: goalId,
+      agent: "claude",
+      decision: "Worth another three. Carry on.",
+    });
+    for (let round = 4; round <= 6; round += 1) {
+      await call(claude, "impl_council_report", { goal_id: goalId, agent: "claude", ...report() });
+      const { payload } = await call(codex, "impl_council_review", {
+        goal_id: goalId,
+        agent: "codex",
+        ...review(),
+      });
+      if (round < 6) {
+        assert.equal(payload.status, "active", `round ${round} should carry on`);
+      } else {
+        assert.equal(payload.status, "needs_user", "round 6 is the next review point");
+      }
+    }
+    await call(claude, "council_abandon", { agent: "claude", reason: "cleanup" });
+  });
+});

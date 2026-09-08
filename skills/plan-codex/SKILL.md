@@ -125,9 +125,10 @@ yourself, and not before. This is the one signal the user acts on.
 ## How it ends
 
 - **`ready`** — you reported the plan implementation-ready.
-- **`needs_user`** — Claude hit a decision that is the user's to make. The council parks.
-  Nothing for you to do until it resumes; your `plan_council_await` returns straight away
-  saying so.
+- **`needs_user`** — the council is parked on the user. Either a decision — yours or
+  Claude's — or the round-3 review point, where it asks whether another three rounds are
+  worth it. Nothing is wrong in that second case; your `plan_council_await` returns straight
+  away and there is nothing for you to do until they answer.
 - **`capped`** — ten rounds without your sign-off. Tell the user plainly that you never
   signed off, and what still stands.
 - **`error`** — Claude stopped responding.

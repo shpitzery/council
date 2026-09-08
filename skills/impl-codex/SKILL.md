@@ -102,8 +102,10 @@ is right, drop the point — repeating an answered finding burns one of ten roun
 ## How it ends
 
 - **`ready`** — you approved it.
-- **`needs_user`** — parked on the user, from your `plan_defect` or Claude's open question.
-  Your `await` returns straight away saying so.
+- **`needs_user`** — parked on the user. From your `plan_defect`, Claude's open question,
+  the round-3 review point, or a first review whose gaps say the work was never finished.
+  Your `await` returns straight away saying so. The last two are the server working, not a
+  problem: report the gaps you found honestly and let the user rule on scope.
 - **`capped`** — rounds ran out without your approval. Say plainly that you never approved.
 - **`error`** — Claude stopped responding.
 

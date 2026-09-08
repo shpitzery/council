@@ -334,7 +334,9 @@ describe("Medium and Low findings past the severity gate", () => {
       }),
     });
     assert.equal(isError, false);
-    assert.equal(payload.round, 4);
+    // Round 3 is the review point, so the council parks here rather than opening round 4.
+    assert.equal(payload.status, "needs_user");
+    assert.equal(payload.round, 3);
 
     const step = readFileSync(join(root, goalId, "r3-resolve-6.md"), "utf8");
     assert.match(step, /Medium\/Low findings deferred/);
@@ -342,6 +344,15 @@ describe("Medium and Low findings past the severity gate", () => {
   });
 
   test("a critique with no Medium or Low needs no account of them", async () => {
+    // Carry on past the review point first — the council is parked on it.
+    const resumed = await call(claude, "plan_council_resume", {
+      goal_id: goalId,
+      agent: "claude",
+      decision: "Carry on — three more rounds.",
+    });
+    assert.equal(resumed.payload.phase, "critique");
+    assert.equal(resumed.payload.round, 4);
+
     await call(codex, "plan_council_critique", { goal_id: goalId, agent: "codex", ...critique() });
     const { payload, isError } = await call(claude, "plan_council_resolve", {
       goal_id: goalId,

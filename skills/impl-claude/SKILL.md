@@ -158,6 +158,39 @@ Worth knowing, so you are not surprised by a round that could have ended:
 - a report that does not match the diff
 - an approval with no account of what was actually checked
 
+## The review point — round 3
+
+The council stops after round 3 and asks whether another three rounds are worth it. It is
+**not** the cap and nothing is wrong when it fires: the status is `needs_user`, the work is
+intact, and answering carries it on.
+
+Say it plainly when it happens. Give the user what they need to decide in three lines:
+
+- what the last round found, and whether those findings were new work or repairs of the
+  previous round's repairs
+- how much the diff has grown since round 1
+- what you would do — carry on, stop and take what is there, or hand it back
+
+**Recommend, do not decide.** Carrying on because the round cap allows it is exactly the
+habit this gate exists to break. Ten rounds was never a safety margin; it was permission.
+
+The next checkpoint moves out by three each time, so the answer is always "three more
+rounds", never "unlimited from here".
+
+## When the first review says the work is not finished
+
+A round-1 review with three or more `gaps` parks the council. Gaps are scope that is not
+implemented at all, and this mode verifies work that is done — pointed at work that is not, it
+becomes a supervised implementation session costing two full verification passes a round. One
+real council spent 208 minutes that way.
+
+Tell the user which items are missing, from `coverage`, and offer the two real choices:
+finish the work and carry on, or narrow the scope to what is actually done. Then
+`impl_council_resume` with their answer, which opens the next round.
+
+This fires on round 1 only. Later rounds close gaps as they go, and stopping on those would
+park a council doing exactly what it should.
+
 ## Rules the server cannot enforce
 
 **Never guess at a decision that is the user's.** Put it in `needs_user_decision` and the
