@@ -22,6 +22,12 @@ safety, or maintainability.
 
 - **The diff.** `git diff <base_ref>` — the base commit is given to you. Read the whole diff
   before forming any view.
+
+  **Outside a git repository** there is no diff: `base_ref` is `unmeasured` and
+  `diff_measured` is `false`. Read instead every file in `latest_report.files`, in full —
+  the server has checked they exist and fingerprints them each round. Everything below that
+  says "the diff" means those files. Completeness against the plan works exactly the same;
+  it never depended on git.
 - **The report**, if the author wrote one: what they say they changed.
 - **The plan and scope**, if a plan is attached: the yardstick for complete.
 
@@ -72,6 +78,10 @@ it is unresolved instead.
 - changes that are clearly intentional and part of the broader work
 
 ## Does the report match the diff?
+
+**Skip this section outside a git repository**, and omit `report_matches_diff`. With no
+before-and-after, nothing can show a change the report failed to name. Still check that each
+claim in the report is true of the files it names — that part needs no diff.
 
 Answer separately, because it is the failure mode unique to verifying someone else's work:
 

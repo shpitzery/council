@@ -58,7 +58,24 @@ function requireCount(value, field) {
   return value;
 }
 
-export function validateReport(fields, round) {
+export function validateReport(fields, round, measured = true) {
+  const files = Array.isArray(fields.files)
+    ? [...new Set(fields.files.map((f) => String(f).trim()).filter(Boolean))]
+    : [];
+
+  // With no repository there is no diff, so the report is the only place the deliverable is
+  // named. Prose alone leaves the critic guessing what to read — the "looks done" signal this
+  // mode exists to replace — so outside git the files are required, and the server fingerprints
+  // them instead of diffing.
+  if (!measured && files.length === 0) {
+    throw new ValidationError(
+      "files",
+      "required when the project is not a git repository. List every file you created or " +
+        "changed, by path. The server has no diff to measure here, so these are what the " +
+        "critic reads and what the server fingerprints from round to round.",
+    );
+  }
+
   return {
     kind: "report",
     actor: AUTHOR,
@@ -67,6 +84,7 @@ export function validateReport(fields, round) {
     applied: optionalText(fields.applied, "applied", LIMITS_IMPL.block),
     rejected: optionalText(fields.rejected, "rejected", LIMITS_IMPL.block),
     needs_user: optionalText(fields.needs_user_decision, "needs_user_decision", LIMITS_IMPL.block),
+    files: files.length ? JSON.stringify(files) : null,
   };
 }
 
@@ -76,7 +94,7 @@ export function validateReport(fields, round) {
  * `hasPlan` decides whether gaps are meaningful at all: without a plan there is nothing for
  * the work to be incomplete against.
  */
-export function validateReview(fields, round, hasPlan) {
+export function validateReview(fields, round, hasPlan, measured = true) {
   const clean = {
     kind: "review",
     actor: CRITIC,
@@ -98,7 +116,12 @@ export function validateReview(fields, round, hasPlan) {
   if (!VERDICTS_IMPL.includes(clean.verdict)) {
     throw new ValidationError("verdict", `must be one of ${VERDICTS_IMPL.join(", ")}`);
   }
-  if (!MATCHES.includes(clean.report_matches_diff)) {
+  // Without a base commit there is no before-and-after, so nothing can be compared to the
+  // report. Requiring the field anyway would only ask the critic to invent an answer.
+  if (!measured) {
+    clean.report_matches_diff = null;
+    clean.mismatch = null;
+  } else if (!MATCHES.includes(clean.report_matches_diff)) {
     throw new ValidationError("report_matches_diff", `must be one of ${MATCHES.join(", ")}`);
   }
 

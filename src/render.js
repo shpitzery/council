@@ -389,7 +389,9 @@ export function writeImplBrief(council) {
     "",
     `- Project: ${council.project_path}`,
     council.git_branch ? `- Branch: ${council.git_branch}` : null,
-    `- Base commit: ${council.base_ref}`,
+    council.base_ref === "unmeasured"
+      ? "- Base: none — not a git repository. Measured from the files each report names."
+      : `- Base commit: ${council.base_ref}`,
     council.plan_path ? `- Plan: ${council.plan_path}` : "- Plan: none attached",
     council.plan_scope ? `- Scope in this council: ${council.plan_scope}` : null,
     council.dirty_at_open
@@ -478,7 +480,9 @@ export function implSummaryBlock(council, steps) {
       `${reviews.length} review${reviews.length === 1 ? "" : "s"}`,
     "",
     `Task:             ${council.task}`,
-    `Base commit:      ${council.base_ref}`,
+    council.base_ref === "unmeasured"
+      ? "Base:             none (not a git repository)"
+      : `Base commit:      ${council.base_ref}`,
     council.plan_path
       ? `Plan:             ${council.plan_path}${council.plan_scope ? ` (scope: ${council.plan_scope})` : ""}`
       : "Plan:             none attached",

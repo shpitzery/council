@@ -93,20 +93,6 @@ describe("an implementation council, end to end", () => {
     goalId = payload.goal_id;
   });
 
-  test("opening outside a git repository is refused, with the reason", async () => {
-    const other = makeRoot("impl-nogit");
-    const c2 = await connect("claude", other);
-    const { payload, isError } = await call(c2, "impl_council_open", {
-      agent: "claude",
-      task: "somewhere with no git",
-      project_path: "/tmp",
-    });
-    assert.equal(isError, true);
-    assert.match(payload.error, /not a git repository|measures the change as a diff/);
-    await c2.close();
-    rmSync(other, { recursive: true, force: true });
-  });
-
   test("the critic cannot report and the author cannot review", async () => {
     const wrong = await call(codex, "impl_council_report", {
       goal_id: goalId,
@@ -252,6 +238,14 @@ describe("what an approval is refused for", () => {
     const { payload, isError } = await attempt({ report_matches_diff: "no" });
     assert.equal(isError, true);
     assert.equal(payload.field, "mismatch");
+  });
+
+  // The tool schema lets this field be omitted, because outside git there is no diff to
+  // compare. Inside git it is still owed — the rule that knows the mode enforces it.
+  test("in a git repository, silence on whether the report matches the diff", async () => {
+    const { payload, isError } = await attempt({ report_matches_diff: undefined });
+    assert.equal(isError, true);
+    assert.equal(payload.field, "report_matches_diff");
   });
 
   test("gaps counted with no plan to be incomplete against", async () => {
@@ -842,5 +836,115 @@ describe("the gates that stop a council going nowhere", () => {
       }
     }
     await call(claude, "council_abandon", { agent: "claude", reason: "cleanup" });
+  });
+});
+
+// Plenty of work this mode should check produces a document rather than a commit — a spec, a
+// design, a generated config — often in a folder that was never a repository. Completeness
+// against the plan never depended on git; only the diff did. So outside git the council opens
+// anyway, and the author names the deliverable files for the server to fingerprint.
+describe("verifying work outside a git repository", () => {
+  let root, dir, claude, codex, goalId;
+
+  const nogitReview = (over = {}) => {
+    const r = review(over);
+    delete r.report_matches_diff;
+    return r;
+  };
+
+  before(async () => {
+    root = makeRoot("impl-nogit");
+    dir = join(root, "..", `council-nogit-work-${process.pid}`);
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "spec.md"), "# Spec\n\nThe first version.\n");
+    claude = await connect("claude", root);
+    codex = await connect("codex", root);
+  });
+
+  after(async () => {
+    await claude?.close();
+    await codex?.close();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("it opens, and says plainly there is no diff", async () => {
+    const { payload, isError } = await call(claude, "impl_council_open", {
+      agent: "claude",
+      task: "write the spec the plan describes",
+      project_path: dir,
+      plan_path: "/plan.md",
+      plan_scope: "the spec",
+    });
+    assert.equal(isError, false);
+    assert.equal(payload.base_ref, "unmeasured");
+    assert.equal(payload.diff_measured, false);
+    goalId = payload.goal_id;
+    await call(codex, "impl_council_open", { agent: "codex" });
+  });
+
+  test("a report that names no files is refused", async () => {
+    const { payload, isError } = await call(claude, "impl_council_report", {
+      goal_id: goalId,
+      agent: "claude",
+      ...report(),
+    });
+    assert.equal(isError, true);
+    assert.equal(payload.field, "files");
+    assert.match(payload.error, /not a git repository/);
+  });
+
+  test("a report that names a file that does not exist is refused", async () => {
+    const { payload, isError } = await call(claude, "impl_council_report", {
+      goal_id: goalId,
+      agent: "claude",
+      ...report({ files: ["spec.md", "missing.md"] }),
+    });
+    assert.equal(isError, true);
+    assert.match(payload.error, /do not exist.*missing\.md/);
+  });
+
+  test("the named files are fingerprinted by the server and shown to the critic", async () => {
+    const { payload, isError } = await call(claude, "impl_council_report", {
+      goal_id: goalId,
+      agent: "claude",
+      ...report({ files: ["spec.md"] }),
+    });
+    assert.equal(isError, false);
+    assert.ok(payload.diff_lines > 0);
+    assert.match(payload.diff_digest, /^[0-9a-f]{16}$/);
+    assert.deepEqual(payload.latest_report.files, ["spec.md"]);
+    assert.equal(payload.warning, undefined, "no empty-diff warning outside git");
+  });
+
+  test("the critic reviews without claiming a diff comparison it cannot make", async () => {
+    const { payload, isError } = await call(codex, "impl_council_review", {
+      goal_id: goalId,
+      agent: "codex",
+      ...nogitReview(),
+    });
+    assert.equal(isError, false);
+    assert.equal(payload.round, 2);
+  });
+
+  test("a changed file changes the fingerprint", async () => {
+    const before = (await call(claude, "impl_council_open", { agent: "claude" })).payload.diff_digest;
+    writeFileSync(join(dir, "spec.md"), "# Spec\n\nThe second version, with the fix.\n");
+    const { payload } = await call(claude, "impl_council_report", {
+      goal_id: goalId,
+      agent: "claude",
+      ...report({ files: ["spec.md"], applied: "Fixed the High." }),
+    });
+    assert.notEqual(payload.diff_digest, before);
+  });
+
+  test("completeness still gates approval, and approval still ends it", async () => {
+    const { payload } = await call(codex, "impl_council_review", {
+      goal_id: goalId,
+      agent: "codex",
+      ...nogitReview({ findings: "No blocking findings.", highs: 0, verdict: "Approve" }),
+    });
+    assert.equal(payload.status, "ready");
   });
 });

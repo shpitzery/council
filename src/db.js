@@ -188,6 +188,7 @@ const SCHEMA = [
      decision            TEXT,
      diff_digest         TEXT,
      diff_lines          INTEGER,
+     files               TEXT,
      created_at          TEXT NOT NULL,
      PRIMARY KEY (goal_id, seq)
    )`,
@@ -206,6 +207,7 @@ const MIGRATIONS = [
   ["plan_steps", "deferred", "TEXT"],
   ["plan_steps", "decisions", "INTEGER"],
   ["plan_steps", "decision_list", "TEXT"],
+  ["impl_steps", "files", "TEXT"],
 ];
 
 // Column defaults that moved after a table shipped. Same cause as MIGRATIONS — the CREATE
@@ -719,7 +721,7 @@ const IMPL_STEP_COLUMNS = [
   "summary", "applied", "rejected", "needs_user",
   "findings", "blockers", "highs", "mediums", "lows", "gaps", "coverage",
   "verdict", "verification", "report_matches_diff", "mismatch", "plan_defect",
-  "decision", "diff_digest", "diff_lines",
+  "decision", "diff_digest", "diff_lines", "files",
 ];
 
 export function appendImplStep(db, goalId, step) {

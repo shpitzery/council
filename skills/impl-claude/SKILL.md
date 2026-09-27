@@ -53,6 +53,10 @@ base; work you already committed needs one. If the user's words point at a commi
 the last commit", "check what I pushed" — pass `base_ref` accordingly rather than finding out
 from an empty diff two calls later.
 
+**Not a git repository at all.** Fine — open anyway, with no `base:`. The council records
+that there is no diff and measures the files your report names instead. Do not `git init`
+the user's folder to manufacture one.
+
 **Nothing at all — bare `/impl-council`.** Ask what to verify or implement. Do not open a
 council on a guess; an implementation council on the wrong task blocks every other mode until
 someone abandons it.
@@ -118,6 +122,11 @@ Never say it before the council exists. Codex's skill refuses to open one itself
 3. **`impl_council_report`** — what you changed and why, file by file where it matters. If
    the tree was already dirty when you opened, say whether those changes are the work under
    review or something unrelated that will otherwise be verified by accident.
+
+   **Outside a git repository, pass `files`** — every file you created or changed, by path.
+   There is no diff there, so this list is what Codex reads and what the server fingerprints;
+   the report is refused without it, and refused if a named file does not exist. Name every
+   one: a file left off the list is a file nobody verifies.
 
    **On round 1 only, this is where you hand over**: once the report lands, say `Start Codex
    now.` on its own line. Later rounds need nothing — Codex is already in the loop.

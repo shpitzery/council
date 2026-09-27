@@ -42,6 +42,9 @@ on that phrasing costs the user a wrong turn.
    `plan_path` and the `plan_scope` in the reply. It carries the method: completeness first,
    then correctness, then whether the report matches the diff.
 
+   If `diff_measured` is `false`, the project is not a git repository: read the files in
+   `latest_report.files` instead of a diff, and leave `report_matches_diff` out.
+
 4. **`impl_council_review`** — submit its output. `findings` and the four severity counts,
    `gaps` and `coverage` for the completeness pass, `verification` for what you actually
    checked, `report_matches_diff`, and the verdict.

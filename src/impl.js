@@ -7,6 +7,8 @@
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 
 import {
   transact,
@@ -47,6 +49,10 @@ import {
 } from "./render.js";
 
 const AGENTS = [AUTHOR, CRITIC];
+
+// Stored as the base when the project is not a git repository. The column is NOT NULL and
+// every council needs a value; this one says plainly that there is nothing to diff against.
+export const UNMEASURED = "unmeasured";
 const TERMINAL = ["ready", "capped", "error", "aborted"];
 
 /** Read-only git, never allowed to hang a tool call. Null on any failure. */
@@ -70,13 +76,64 @@ function git(cwd, args) {
  * This is the improvement over the plan council's file digest: the side that wrote the code
  * is not the side saying how much of it there is.
  */
-function diffStats(council) {
+function diffStats(council, declared = null) {
+  if (council.base_ref === UNMEASURED) {
+    return fileStats(council.project_path, declared ?? declaredFiles(council.goal_id));
+  }
   const out = git(council.project_path, ["diff", council.base_ref]);
   if (out === null) return { diff_digest: null, diff_lines: null };
   return {
     diff_digest: createHash("sha256").update(out).digest("hex").slice(0, 16),
     diff_lines: out === "" ? 0 : out.split("\n").length,
   };
+}
+
+/**
+ * Outside git: the files the author named, read and fingerprinted by the server.
+ *
+ * Weaker than a diff — it cannot see a change nobody named — but it is still measured rather
+ * than reported. A declared file that changes between rounds changes the digest, and one that
+ * does not exist is refused at report time.
+ */
+// Set once by registerImplTools; the helpers below only ever run inside its tools.
+let dbOf = null;
+
+function fileStats(projectPath, files) {
+  if (!files || files.length === 0) return { diff_digest: null, diff_lines: null };
+  const hash = createHash("sha256");
+  let lines = 0;
+  for (const f of files) {
+    const path = resolve(projectPath, f);
+    if (!existsSync(path)) continue;
+    const body = readFileSync(path);
+    hash.update(f).update("\0").update(body);
+    lines += body.length ? body.toString("utf8").split("\n").length : 0;
+  }
+  return { diff_digest: hash.digest("hex").slice(0, 16), diff_lines: lines };
+}
+
+/** The file list from the latest report that named one. */
+function declaredFiles(goalId) {
+  const row = getImplSteps(dbOf(), goalId)
+    .filter((s) => s.kind === "report" && s.files)
+    .at(-1);
+  return row ? JSON.parse(row.files) : null;
+}
+
+/** Every declared path must exist, and be a file. Named but missing is refused, not skipped. */
+function checkDeclared(projectPath, files) {
+  const missing = files.filter((f) => {
+    const path = resolve(projectPath, f);
+    return !existsSync(path) || !statSync(path).isFile();
+  });
+  if (missing.length) {
+    const error = new Error(
+      `these declared files do not exist under ${projectPath}: ${missing.join(", ")}. ` +
+        "Name each file you created or changed, by a path that resolves.",
+    );
+    error.field = "files";
+    throw error;
+  }
 }
 
 export function registerImplTools(server, deps) {
@@ -95,6 +152,7 @@ export function registerImplTools(server, deps) {
     sweepStale,
   } = deps;
 
+  dbOf = db;
   const steps = (goalId) => getImplSteps(db(), goalId);
   const stateOf = (c) => implState(steps(c.goal_id), c.max_rounds);
   const joined = (goalId) => getImplParticipants(db(), goalId).map((p) => p.agent);
@@ -155,6 +213,7 @@ export function registerImplTools(server, deps) {
       phase: state.phase,
       next_actor: state.actor ?? null,
       reviews_so_far: all.filter((s) => s.kind === "review").length,
+      diff_measured: council.base_ref !== UNMEASURED,
       ...diffStats(council),
       latest_report: report
         ? {
@@ -163,6 +222,7 @@ export function registerImplTools(server, deps) {
             applied: report.applied,
             rejected: report.rejected,
             needs_user_decision: report.needs_user,
+            files: report.files ? JSON.parse(report.files) : null,
           }
         : null,
       latest_review: review
@@ -374,16 +434,21 @@ export function registerImplTools(server, deps) {
             // base contains the very change under review and the diff comes out empty.
             const wanted = base_ref ?? "HEAD";
             const resolved = git(project_path, ["rev-parse", "--verify", `${wanted}^{commit}`]);
-            if (!resolved) {
+
+            // A named base that git cannot resolve is a mistake worth stopping for: the
+            // caller asked for a diff against something specific and would get silence.
+            if (!resolved && base_ref) {
               throw new Error(
-                base_ref
-                  ? `${project_path} has no commit at ${base_ref}. Pass a ref git can resolve ` +
-                    "— HEAD~1, a branch name, or a commit sha."
-                  : `${project_path} is not a git repository, or has no commits yet. This mode ` +
-                    "measures the change as a diff from a base commit, so it needs one.",
+                `${project_path} has no commit at ${base_ref}. Pass a ref git can resolve ` +
+                  "— HEAD~1, a branch name, or a commit sha.",
               );
             }
-            const head = resolved;
+            // No repo at all is a different case, and refusing it was wrong. Plenty of work
+            // this mode should check produces a document rather than a commit: a spec, a
+            // design, a generated config. Completeness against the plan — the thing the mode
+            // is actually for — never depended on git. Only the diff measurement does, so
+            // that is the only part that goes away.
+            const head = resolved ?? UNMEASURED;
             const status = git(project_path, ["status", "--porcelain"]);
 
             const id = makeGoalId(
@@ -478,6 +543,14 @@ export function registerImplTools(server, deps) {
             .max(LIMITS_IMPL.block)
             .optional()
             .describe("Unresolved choices that are the user's. Anything here stops the council."),
+          files: z
+            .array(z.string())
+            .optional()
+            .describe(
+              "Every file you created or changed, by path (relative to project_path or " +
+                "absolute). Required when the project is not a git repository — there is no " +
+                "diff there, so these are what the critic reads and the server fingerprints.",
+            ),
         },
       },
       async ({ goal_id, agent, ...fields }) => {
@@ -493,9 +566,13 @@ export function registerImplTools(server, deps) {
                   : `the council has stopped — ${state.reason}`,
               );
             }
+            const measured = council.base_ref !== UNMEASURED;
+            const clean = validateReport(fields, state.round, measured);
+            const declared = clean.files ? JSON.parse(clean.files) : null;
+            if (declared) checkDeclared(council.project_path, declared);
             const seq = appendImplStep(db(), goal_id, {
-              ...validateReport(fields, state.round),
-              ...diffStats(council),
+              ...clean,
+              ...diffStats(council, declared),
             });
             sync(council);
             return { seq, round: state.round };
@@ -510,7 +587,7 @@ export function registerImplTools(server, deps) {
           // nothing and approve it. That silent approval is the worst outcome this mode has.
           const { diff_lines } = diffStats(council);
           return reply(council, agent, {
-            ...(diff_lines === 0
+            ...(council.base_ref !== UNMEASURED && diff_lines === 0
               ? {
                   warning:
                     `The diff against ${council.base_ref.slice(0, 8)} is empty — there is ` +
@@ -570,7 +647,11 @@ export function registerImplTools(server, deps) {
             ),
           report_matches_diff: z
             .enum(MATCHES)
-            .describe("Does the author's report account for everything the diff changes?"),
+            .optional()
+            .describe(
+              "Does the author's report account for everything the diff changes? Required in " +
+                "a git repository; omit it outside one, where there is no diff to compare.",
+            ),
           mismatch: z
             .string()
             .max(LIMITS_IMPL.short)
@@ -601,7 +682,12 @@ export function registerImplTools(server, deps) {
               );
             }
             const seq = appendImplStep(db(), goal_id, {
-              ...validateReview(fields, state.round, Boolean(council.plan_path)),
+              ...validateReview(
+                fields,
+                state.round,
+                Boolean(council.plan_path),
+                council.base_ref !== UNMEASURED,
+              ),
               ...diffStats(council),
             });
             sync(council);
